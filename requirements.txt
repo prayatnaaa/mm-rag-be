@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+pytube
+youtube_transcript_api
+google-generativeai
+transformers
+torch
+faiss-cpu
+pillow
+python-dotenv
+opencv-python
