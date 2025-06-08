@@ -3,7 +3,9 @@ from fastapi import APIRouter, File, UploadFile, Form, HTTPException
 from app.loader.pdf_loader import load_pdf_data
 from app.loader.txt_loader import load_txt_data
 from app.loader.youtube_loader import load_youtube_data
-from app.db.metadata_store import list_sources
+from app.db.metadata_store import (
+    list_sources, delete_source, set_active_status, get_active_sources
+)
 from app.rag_pipeline import run_rag_pipeline
 
 router = APIRouter()
@@ -36,6 +38,24 @@ def upload_txt(file: UploadFile = File(...)):
 @router.get("/source/list")
 def list_all():
     return list_sources()
+
+@router.get("/source/active")
+def list_active():
+    return get_active_sources()
+
+@router.delete("/source/{source_id}")
+def remove_source(source_id: str):
+    success = delete_source(source_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Source not found")
+    return {"status": "deleted"}
+
+@router.patch("/source/{source_id}")
+def toggle_source(source_id: str, active: bool = Form(...)):
+    success = set_active_status(source_id, active)
+    if not success:
+        raise HTTPException(status_code=404, detail="Source not found")
+    return {"status": "updated", "active": active}
 
 @router.post("/query")
 def query(req: dict):
