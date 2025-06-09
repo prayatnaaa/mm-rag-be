@@ -1,9 +1,9 @@
 import nltk
 from nltk.tokenize import sent_tokenize
 
-nltk.download('punkt')
+nltk.download('punkt_tab')
 
-def chunk_text(text, max_tokens=400, overlap=50):
+def chunk_text(text, max_tokens=512, overlap=50):
     """
     Chunk teks berdasarkan kalimat dengan overlap.
     Hitung token berdasarkan kata (kasar).

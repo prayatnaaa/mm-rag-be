@@ -1,12 +1,14 @@
 import os
 from fastapi import APIRouter, File, UploadFile, Form, HTTPException
-from app.loader.pdf_loader import load_pdf_data
-from app.loader.txt_loader import load_txt_data
+from app.loader.pdf_loader import (load_pdf_data, load_pdf_data_from_minio)
+from app.loader.txt_loader import (load_txt_data, load_txt_data_from_minio)
 from app.loader.youtube_loader import load_youtube_data
 from app.db.metadata_store import (
     list_sources, delete_source, set_active_status, get_active_sources
 )
 from app.rag_pipeline import run_rag_pipeline
+from app.utils.minio_client import upload_bytes_to_minio
+from app.utils.file_utils import generate_source_id
 
 router = APIRouter()
 os.makedirs("storage", exist_ok=True)
@@ -60,3 +62,24 @@ def toggle_source(source_id: str, active: bool = Form(...)):
 @router.post("/query")
 def query(req: dict):
     return run_rag_pipeline(req["question"])
+
+@router.post("/source/upload")
+def upload_source(file: UploadFile = File(...), source_id: str = Form(None)):
+    if source_id is None:
+        source_id = generate_source_id(file.filename)
+
+    ext = file.filename.split(".")[-1]
+    file_bytes = file.file.read()
+
+    if ext == "pdf":
+        object_name = f"pdfs/{source_id}_{file.filename}"
+        upload_bytes_to_minio(file_bytes, object_name, "application/pdf")
+        return load_pdf_data_from_minio(object_name, source_id)
+
+    elif ext == "txt":
+        object_name = f"txts/{source_id}_{file.filename}"
+        upload_bytes_to_minio(file_bytes, object_name, "text/plain")
+        return load_txt_data_from_minio(object_name, source_id)
+
+    else:
+        raise HTTPException(status_code=400, detail="Unsupported file type")

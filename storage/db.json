@@ -1,15 +1,22 @@
 {
-  "txt_33d313de": {
-    "url": "storage/Awatara Krisna.txt",
-    "title": "TXT: Awatara Krisna.txt",
-    "chunks": [
-      "emb_0",
-      "emb_1",
-      "emb_2",
-      "emb_3",
-      "emb_4",
-      "emb_5"
+  "KWITANSI_MAHASISWA_2205551068_20250609183642": {
+    "path": "s3://mm-rag-data/pdfs/KWITANSI_MAHASISWA_2205551068_20250609183642_KWITANSI_MAHASISWA_2205551068.pdf",
+    "title": "PDF: pdfs/KWITANSI_MAHASISWA_2205551068_20250609183642_KWITANSI_MAHASISWA_2205551068.pdf",
+    "embedding_ids": [
+      "emb_36",
+      "emb_37",
+      "emb_38",
+      "emb_39",
+      "emb_40",
+      "emb_41",
+      "emb_42",
+      "emb_43",
+      "emb_44",
+      "emb_45",
+      "emb_46",
+      "emb_47"
     ],
-    "active": false
+    "active": true,
+    "created_at": "2025-06-09T10:36:43.504017"
   }
 }
