@@ -6,9 +6,11 @@ from app.loader.youtube_loader import load_youtube_data
 from app.db.metadata_store import (
     list_sources, delete_source, set_active_status, get_active_sources
 )
+from app.loader.web_loader import load_web_data
 from app.rag_pipeline import run_rag_pipeline
 from app.utils.minio_client import upload_bytes_to_minio
 from app.utils.file_utils import generate_source_id
+from app.retriever.faiss_index import load_faiss_index
 
 router = APIRouter()
 os.makedirs("storage", exist_ok=True)
@@ -58,6 +60,17 @@ def toggle_source(source_id: str, active: bool = Form(...)):
     if not success:
         raise HTTPException(status_code=404, detail="Source not found")
     return {"status": "updated", "active": active}
+
+
+@router.post("/source/web")
+def add_web(url: str = Form(...)):
+    from uuid import uuid4
+    source_id = f"web_{uuid4().hex[:8]}"
+    try:
+        chunk_count = load_web_data(url, source_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "ok", "source_id": source_id, "chunks": chunk_count}
 
 @router.post("/query")
 def query(req: dict):

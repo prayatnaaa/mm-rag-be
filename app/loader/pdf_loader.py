@@ -1,10 +1,12 @@
 import os
 from PyPDF2 import PdfReader
-from app.retriever.embed_clip import embed_text_only, truncate_clip_text
+from app.retriever.embed_clip import embed_text_only, truncate_clip_text, embed_image_only
 from app.retriever.faiss_index import add_embedding, save_faiss_index
 from app.db.metadata_store import save_source
 from app.utils.chunker import chunk_text 
 from app.utils.minio_client import get_file_stream_from_minio
+# from pdf2image import convert_from_bytes
+from PyPDF2 import PdfReader
 
 MINIO_BUCKET = os.getenv("MINIO_BUCKET", "images")
 
@@ -43,3 +45,32 @@ def load_pdf_data_from_minio(object_name: str, source_id: str):
 
     save_source(source_id, f"s3://{MINIO_BUCKET}/{object_name}", f"PDF: {object_name}", embedding_ids)
     return len(embedding_ids)
+
+
+# def load_pdf_data_from_minio(object_name: str, source_id: str):
+#     stream = get_file_stream_from_minio(object_name)
+#     reader = PdfReader(stream)
+#     stream.seek(0)  # Reset stream position for pdf2image
+#     images = convert_from_bytes(stream.read())
+#     stream.seek(0)  # Reset again if needed later
+
+#     embedding_ids = []
+
+#     for i, page in enumerate(reader.pages):
+#         text = page.extract_text() or ""
+
+#         # ➤ Embed text chunks
+#         for chunk in truncate_clip_text(text):
+#             vec = embed_text_only(chunk)
+#             eid = add_embedding(vec, metadata={"source": source_id, "text": chunk, "page": i})
+#             embedding_ids.append(eid)
+
+#         # ➤ Embed rendered image of the page
+#         if i < len(images):  # just to be safe
+#             img = images[i].convert("RGB")
+#             vec = embed_image_only(img)
+#             eid = add_embedding(vec, metadata={"source": source_id, "image_page": i})
+#             embedding_ids.append(eid)
+
+#     save_source(source_id, f"s3://{MINIO_BUCKET}/{object_name}", f"PDF: {object_name}", embedding_ids)
+#     return len(embedding_ids)

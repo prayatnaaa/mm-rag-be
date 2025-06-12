@@ -1,129 +1,224 @@
+# import os
+# import cv2
+# import tempfile
+# import yt_dlp
+# from fastapi import HTTPException
+# from moviepy.editor import VideoFileClip
+# from faster_whisper import WhisperModel
+
+# from app.utils.file_utils import save_frame
+# from app.retriever.embed_clip import embed_text_image
+# from app.retriever.faiss_index import add_embedding
+# from app.db.metadata_store import save_source
+# from app.utils.minio_client import upload_image
+
+
+# def transcribe_audio_whisper(audio_path: str):
+#     model = WhisperModel("base", compute_type="int8")
+#     segments, _ = model.transcribe(audio_path)
+#     return [{"text": seg.text.strip(), "start": seg.start, "end": seg.end} for seg in segments]
+
+
+# def extract_audio(video_path: str, audio_path: str):
+#     clip = VideoFileClip(video_path)
+#     clip.audio.write_audiofile(audio_path, logger=None)
+
+
+# def load_youtube_data(url: str):
+#     # --- Setup
+#     with tempfile.TemporaryDirectory() as temp_dir:
+#         ydl_opts = {
+#             "outtmpl": os.path.join(temp_dir, "%(id)s.%(ext)s"),
+#             "format": "(bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4])[protocol^=http]",
+#             "quiet": True,
+#         }
+
+#         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+#             info = ydl.extract_info(url, download=True)
+
+#         video_id = info["id"]
+#         title = info["title"]
+#         source_id = f"yt_{video_id}"
+#         video_filename = f"{video_id}.mp4"
+#         video_path = os.path.join(temp_dir, video_filename)
+
+#         # --- Extract audio and transcript
+#         audio_path = os.path.join(temp_dir, "audio.mp3")
+#         extract_audio(video_path, audio_path)
+#         transcript = transcribe_audio_whisper(audio_path)
+
+#         # --- Extract frames
+#         cap = cv2.VideoCapture(video_path)
+#         fps = cap.get(cv2.CAP_PROP_FPS)
+#         frame_interval = max(1, int(fps * 10))
+#         frames = []
+#         count, success = 0, True
+
+#         while success:
+#             success, image = cap.read()
+#             if success and count % frame_interval == 0:
+#                 local_frame_path = os.path.join(temp_dir, f"frame_{count}.jpg")
+#                 save_frame(image, local_frame_path)
+#                 if not os.path.exists(local_frame_path):
+#                     print(f"❗️ Frame gagal disimpan: {local_frame_path}")
+
+#                 if os.path.exists(local_frame_path):
+#                     object_name = f"{source_id}/frame_{count}.jpg"
+#                     frames.append((count / fps, local_frame_path, object_name))
+#                 else:
+#                     print(f"❌ Frame tidak ditemukan setelah disimpan: {local_frame_path}")
+
+#                 # object_name = f"{source_id}/frame_{count}.jpg"
+#                 # frames.append((count / fps, local_frame_path, object_name))
+#             count += 1
+#         cap.release()
+
+#         if not frames:
+#             raise HTTPException(status_code=500, detail="No frames extracted from the video.")
+
+#         # --- Embed & upload
+#         embeddings = []
+#         for entry in transcript:
+#             text = entry["text"]
+#             start = entry["start"]
+#             closest_frame = min(frames, key=lambda f: abs(f[0] - start))
+
+#             local_path = closest_frame[1]
+#             object_name = closest_frame[2]
+#             image_url = upload_image(local_path, object_name)
+
+#             vec = embed_text_image(text, local_path) 
+#             metadata = {
+#                 "text": text,
+#                 "image_url": image_url,
+#                 "start_time": start,
+#                 "video_id": video_id,
+#                 "title": title,
+#                 "source": "youtube",
+#             }
+#             eid = add_embedding(vec, metadata)
+#             embeddings.append(eid)
+
+#             if os.path.exists(local_path):
+#                 os.remove(local_path)
+
+#             # os.remove(local_path)  # Remove file after it's used
+
+#         # --- Save source metadata
+#         save_source(source_id, f"s3://{source_id}/", title, embeddings)
+
+#         return {"status": "ok", "title": title, "chunks": len(embeddings)}
+
+import os
+import cv2
+import tempfile
+import yt_dlp
 from fastapi import HTTPException
-# from pytube import YouTube
-from pytubefix import YouTube
-from youtube_transcript_api import YouTubeTranscriptApi
-import os, cv2
+from moviepy.editor import VideoFileClip
+from faster_whisper import WhisperModel
+
 from app.utils.file_utils import save_frame
 from app.retriever.embed_clip import embed_text_image
-from app.retriever.faiss_index import add_embedding
+from app.retriever.faiss_index import add_embedding, save_faiss_indices
 from app.db.metadata_store import save_source
 from app.utils.minio_client import upload_image
 
-# def load_youtube_data(url: str):
-#     yt = YouTube(url, use_oauth=True, allow_oauth_cache=True)
-#     video_id = yt.video_id
-#     title = yt.title
-#     print("yt video id ", video_id)
-#     print("yt video title ", title)
 
-#     try:
-#         transcripts = YouTubeTranscriptApi.list_transcripts(video_id)
-#         transcript_obj = transcripts.find_generated_transcript(['id']) 
-#         transcript = transcript_obj.fetch()
-#         print("masuk")
-#         print(transcript)
-#     except Exception as e:
-#         print("ppp")
-#         print("Error:", e)
-#         raise HTTPException(status_code=400, detail="No transcript found for this video.")
+def transcribe_audio_whisper(audio_path: str):
+    model = WhisperModel("base", compute_type="int8")
+    segments, _ = model.transcribe(audio_path)
+    return [{"text": seg.text.strip(), "start": seg.start, "end": seg.end} for seg in segments]
 
-#     # Download video
-#     video_path = yt.streams.filter(file_extension='mp4').first().download(filename=f"{video_id}.mp4")
-#     cap = cv2.VideoCapture(video_path)
 
-#     fps = cap.get(cv2.CAP_PROP_FPS)
-#     frame_interval = int(fps * 10)  # 1 frame every 10 seconds
+def extract_audio(video_path: str, audio_path: str):
+    clip = VideoFileClip(video_path)
+    clip.audio.write_audiofile(audio_path, logger=None)
 
-#     success, image, count = True, None, 0
-#     source_id = f"yt_{video_id}"
-#     os.makedirs(f"storage/temp/{source_id}", exist_ok=True)
-
-#     frames = []
-#     while success:
-#         success, image = cap.read()
-#         if success and count % frame_interval == 0:
-#             path = f"storage/temp/{source_id}/frame_{count}.jpg"
-#             save_frame(image, path)
-#             frames.append(path)
-#         count += 1
-#     cap.release()
-
-#     embeddings = []
-#     for entry in transcript:
-#         print(entry)
-#         text = entry.text
-#         for img_path in frames:
-#             img_name = os.path.basename(img_path)
-#             url = upload_image(img_path, f"{source_id}/{img_name}")
-#             vec = embed_text_image(text, img_path)
-#             eid = add_embedding(vec, metadata={"image_url": url, "text": text})
-#             embeddings.append(eid)
-#             os.remove(img_path)
-
-#     save_source(source_id, url, title, embeddings)
-#     return {"status": "ok", "title": title, "chunks": len(embeddings)}
 
 def load_youtube_data(url: str):
-    yt = YouTube(url, use_oauth=True, allow_oauth_cache=True)
-    video_id = yt.video_id
-    title = yt.title
-    print("yt video id ", video_id)
-    print("yt video title ", title)
+    with tempfile.TemporaryDirectory() as temp_dir:
+        ydl_opts = {
+            "outtmpl": os.path.join(temp_dir, "%(id)s.%(ext)s"),
+            "format": "(bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4])[protocol^=http]",
+            "quiet": True,
+        }
 
-    try:
-        transcripts = YouTubeTranscriptApi.list_transcripts(video_id)
-        transcript_obj = transcripts.find_generated_transcript(['id']) 
-        transcript = transcript_obj.fetch()
-        print("Transcript found")
-    except Exception as e:
-        print("Error:", e)
-        raise HTTPException(status_code=400, detail="No transcript found for this video.")
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
 
-    # Download video locally (harus, karena OpenCV perlu file path)
-    video_path = yt.streams.filter(file_extension='mp4').first().download(filename=f"{video_id}.mp4")
-    cap = cv2.VideoCapture(video_path)
+        video_id = info["id"]
+        title = info["title"]
+        source_id = f"yt_{video_id}"
+        video_filename = f"{video_id}.mp4"
+        video_path = os.path.join(temp_dir, video_filename)
 
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    frame_interval = int(fps * 10)  # 1 frame every 10 seconds
+        audio_path = os.path.join(temp_dir, "audio.mp3")
+        extract_audio(video_path, audio_path)
+        transcript = transcribe_audio_whisper(audio_path)
 
-    success, image, count = True, None, 0
-    source_id = f"yt_{video_id}"
-    os.makedirs(f"storage/temp/{source_id}", exist_ok=True)
+        cap = cv2.VideoCapture(video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_interval = max(1, int(fps * 10))
+        frames = []
+        count, success = 0, True
 
-    frames = []
-    while success:
-        success, image = cap.read()
-        if success and count % frame_interval == 0:
-            # Simpan sementara di lokal
-            local_path = f"storage/temp/{source_id}/frame_{count}.jpg"
-            save_frame(image, local_path)
+        while success:
+            success, image = cap.read()
+            print("sudah sukes")
+            if success and count % frame_interval == 0:
+                local_frame_path = os.path.join(temp_dir, f"frame_{count}.jpg")
+                save_frame(image, local_frame_path)
 
-            # Upload ke MinIO langsung
-            object_name = f"{source_id}/frame_{count}.jpg"
-            url = upload_image(local_path, object_name)
+                if os.path.exists(local_frame_path):
+                    object_name = f"{source_id}/frame_{count}.jpg"
+                    frames.append((count / fps, local_frame_path, object_name))
+                else:
+                    print(f"❌ Frame not saved: {local_frame_path}")
+            count += 1
+        cap.release()
 
-            # Hapus file lokal setelah upload
-            os.remove(local_path)
+        if not frames:
+            raise HTTPException(status_code=500, detail="No frames extracted from the video.")
 
-            # Simpan URL untuk embedding nanti
-            frames.append(url)
-        count += 1
-    cap.release()
+        embeddings = []
+        for entry in transcript:
+            text = entry["text"]
+            start = entry["start"]
+            closest_frame = min(frames, key=lambda f: abs(f[0] - start))
 
-    embeddings = []
-    for entry in transcript:
-        text = entry.text
-        for img_url in frames:
-            # Embed dengan text + url gambar
-            vec = embed_text_image(text, img_url)  # Pastikan embed_text_image bisa handle URL atau modifikasi agar ambil image dari MinIO
+            local_path = closest_frame[1]
+            object_name = closest_frame[2]
 
-            eid = add_embedding(vec, metadata={"image_url": img_url, "text": text})
-            embeddings.append(eid)
+            if not os.path.exists(local_path):
+                print(f"❌ Frame missing before upload: {local_path}")
+                continue
 
-    # Hapus video lokal juga setelah selesai semua proses
-    if os.path.exists(video_path):
-        os.remove(video_path)
+            try:
+                image_url = upload_image(local_path, object_name)
+                print(text)
+                vec = embed_text_image(text, local_path)
 
-    save_source(source_id, f"s3://{source_id}/", title, embeddings)
-    return {"status": "ok", "title": title, "chunks": len(embeddings)}
+                metadata = {
+                    "text": text,
+                    "image_url": image_url,
+                    "start_time": start,
+                    "video_id": video_id,
+                    "title": title,
+                    "source": "youtube",
+                }
+                eid = add_embedding(vec, metadata)
+                print("VEC: ", vec)
+                print("✅ Total embeddings YouTube:", len(embeddings))
+                print("✅ Contoh metadata terakhir:", metadata)
+                embeddings.append(eid)
+            except Exception as e:
+                print(f"🚨 Error processing frame {local_path}: {e}")
+            finally:
+                if os.path.exists(local_path):
+                    os.remove(local_path)
 
+        save_source(source_id, f"s3://{source_id}/", title, embeddings)
+
+        save_faiss_indices()
+
+        return {"status": "ok", "title": title, "chunks": len(embeddings)}

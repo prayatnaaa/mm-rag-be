@@ -6,9 +6,8 @@ model = genai.GenerativeModel("gemini-2.0-flash")
 
 def generate_answer_from_gemini(contexts, query):
     prompt = "Gunakan konteks dari sumber berikut:\n"
-    print('hhhhh')
     for ctx in contexts:
-        print ("context ", ctx)
+        # print("✅", ctx["metadata"].get("image_url", "text only"))
         prompt += f"- {ctx.get('text','')} (sumber: {ctx.get('source','')})\n"
     prompt += f"\nPertanyaan: {query}"
     
