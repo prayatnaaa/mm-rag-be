@@ -36,6 +36,14 @@ def delete_source(source_id):
         return True
     return False
 
+def delete_all_sources():
+    data = _load_metadata()
+    if data:
+        data.clear() 
+        _save_metadata(data)
+        return True
+    return False 
+
 def set_active_status(source_id, is_active: bool):
     data = _load_metadata()
     if source_id in data:

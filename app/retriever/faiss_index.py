@@ -93,8 +93,8 @@ def search_similar_chunks(query_vec, top_k=5, allowed_source_ids=None):
             print("🔍 Checking source:", meta.get("video_id"), "in", allowed_source_ids)
             allowed_video_ids = [key.replace("yt_", "") for key in allowed_source_ids]
             if allowed_source_ids is None or meta.get("video_id") in allowed_video_ids:
-                print("======================================")
-                print("allowed source id ", allowed_source_ids)
+                # print("======================================")
+                # print("allowed source id ", allowed_source_ids)
                 meta_copy = dict(meta)
                 meta_copy["similarity"] = float(D[0][idx_pos])
                 matches.append(meta_copy)
@@ -104,7 +104,7 @@ def search_similar_chunks(query_vec, top_k=5, allowed_source_ids=None):
         results = _search(text_index, text_map)
     elif qdim == MM_DIM:
         results = _search(mm_index, mm_map)
-        print("results MM", results)
+        # print("results MM", results)
     else:
         raise ValueError(f"Unsupported query vector dimension: {qdim}")
 

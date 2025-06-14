@@ -4,13 +4,13 @@ from app.loader.pdf_loader import (load_pdf_data, load_pdf_data_from_minio)
 from app.loader.txt_loader import (load_txt_data, load_txt_data_from_minio)
 from app.loader.youtube_loader import load_youtube_data
 from app.db.metadata_store import (
-    list_sources, delete_source, set_active_status, get_active_sources
+    list_sources, delete_source, set_active_status, get_active_sources, delete_all_sources
 )
 from app.loader.web_loader import load_web_data
 from app.rag_pipeline import run_rag_pipeline
 from app.utils.minio_client import upload_bytes_to_minio
 from app.utils.file_utils import generate_source_id
-from app.retriever.faiss_index import load_faiss_index
+from typing import Optional
 
 router = APIRouter()
 os.makedirs("storage", exist_ok=True)
@@ -54,6 +54,13 @@ def remove_source(source_id: str):
         raise HTTPException(status_code=404, detail="Source not found")
     return {"status": "deleted"}
 
+@router.delete("/source")
+def remove_all_sources():
+    success = delete_all_sources()
+    if not success:
+        raise HTTPException(status_code=500, detail="No Source Available")
+    return {"status": "deleted all sources"}
+
 @router.patch("/source/{source_id}")
 def toggle_source(source_id: str, active: bool = Form(...)):
     success = set_active_status(source_id, active)
@@ -72,9 +79,23 @@ def add_web(url: str = Form(...)):
         raise HTTPException(status_code=400, detail=str(e))
     return {"status": "ok", "source_id": source_id, "chunks": chunk_count}
 
+# @router.post("/query")
+# def query(req: dict):
+#     return run_rag_pipeline(req["question"])
+
 @router.post("/query")
-def query(req: dict):
-    return run_rag_pipeline(req["question"])
+async def query(
+    question: str = Form(...), 
+    image: Optional[UploadFile] = File(None)
+):
+    image_path = None
+    if image:
+        # Simpan image sementara kalau diperlukan
+        image_path = f"/tmp/{image.filename}"
+        with open(image_path, "wb") as f:
+            f.write(await image.read())
+
+    return run_rag_pipeline(question, image_path=image_path)
 
 @router.post("/source/upload")
 def upload_source(file: UploadFile = File(...), source_id: str = Form(None)):
