@@ -1,9 +1,11 @@
 from PIL import Image
 import os
 from datetime import datetime
+import cv2
 
 def save_frame(img, path):
-    Image.fromarray(img).save(path)
+    image_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    Image.fromarray(image_rgb).save(path, "JPEG")
 
 def generate_source_id(filename: str) -> str:
     base_name = os.path.splitext(filename)[0]  

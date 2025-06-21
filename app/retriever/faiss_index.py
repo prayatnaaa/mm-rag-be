@@ -53,6 +53,9 @@ def add_embedding(vec, metadata=None):
     vec = np.array(vec).astype(np.float32)
     eid = f"emb_{len(text_map) + len(mm_map)}"
 
+    if metadata is not None and "source_id" not in metadata and "video_id" in metadata:
+        metadata["source_id"] = f"yt_{metadata['video_id']}"
+
     if vec.shape[0] == TEXT_DIM:
         text_index.add(np.array([vec]))
         text_map[eid] = {"vector": vec, "metadata": metadata}
@@ -62,14 +65,11 @@ def add_embedding(vec, metadata=None):
     else:
         raise ValueError(f"Unsupported vector dimension: {vec.shape[0]}")
 
-    with open("embeddings_combined.json", "w") as f:
-        json.dump({**text_map, **mm_map}, f, indent=2, default=lambda x: x.tolist())
-    print("🧠 Total embeddings: ", len(text_map), len(mm_map))
-
     return eid
 
 def search_similar_chunks(query_vec, top_k=5, allowed_source_ids=None):
-    print("🔎 Searching... TEXT:", text_index.ntotal, " | MM:", mm_index.ntotal)
+    print("Searching... TEXT:", text_index.ntotal, " | MM:", mm_index.ntotal)
+    
     global initialized
     if not initialized:
         load_faiss_indices()
@@ -78,37 +78,52 @@ def search_similar_chunks(query_vec, top_k=5, allowed_source_ids=None):
     qdim = query_vec.shape[1]
     results = []
 
-    def _search(index, emap):
+    def _search(index, emap, label=""):
         if index.ntotal == 0:
-            print("index total 0")
+            print(f"⚠️ {label} index is empty.")
             return []
+        
         D, I = index.search(query_vec, top_k * 5)
         keys = list(emap.keys())
         matches = []
+
         for idx_pos, idx in enumerate(I[0]):
             if idx < 0 or idx >= len(keys):
                 continue
-            meta = emap[keys[idx]]["metadata"]
-            print("metadata ", meta)
-            print("🔍 Checking source:", meta.get("video_id"), "in", allowed_source_ids)
-            allowed_video_ids = [key.replace("yt_", "") for key in allowed_source_ids]
-            if allowed_source_ids is None or meta.get("video_id") in allowed_video_ids:
-                # print("======================================")
-                # print("allowed source id ", allowed_source_ids)
+            
+            key = keys[idx]
+            meta = emap[key]["metadata"]
+            if meta is None:
+                continue
+
+            video_id = meta.get("video_id")
+            allowed_video_ids = [sid.replace("yt_", "") for sid in allowed_source_ids] if allowed_source_ids else None
+            
+            if allowed_source_ids is None or video_id in allowed_video_ids:
                 meta_copy = dict(meta)
-                meta_copy["similarity"] = float(D[0][idx_pos])
+                meta_copy["distance"] = float(D[0][idx_pos])  # L2 distance
                 matches.append(meta_copy)
+        
         return matches
 
     if qdim == TEXT_DIM:
-        results = _search(text_index, text_map)
+        results = _search(text_index, text_map, label="TEXT")
     elif qdim == MM_DIM:
-        results = _search(mm_index, mm_map)
-        # print("results MM", results)
+        results = _search(mm_index, mm_map, label="MM")
     else:
         raise ValueError(f"Unsupported query vector dimension: {qdim}")
 
-    return sorted(results, key=lambda x: x["similarity"])[:top_k]
+    results_sorted = sorted(results, key=lambda x: x["distance"])
+
+    if len(results_sorted) < top_k:
+        print(f"⚠️ Only {len(results_sorted)} valid results after filtering (requested: {top_k}).")
+
+    print(f"🔍 Top {min(len(results_sorted), top_k)} results (sorted by distance):")
+    for r in results_sorted[:top_k]:
+        print(f" - {r['title']} | video_id: {r['video_id']} | distance: {r['distance']:.4f}")
+
+    return results_sorted[:top_k]
+
 
 save_faiss_index = save_faiss_indices
 load_faiss_index = load_faiss_indices

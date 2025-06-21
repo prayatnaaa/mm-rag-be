@@ -26,6 +26,8 @@ def embed_text_image(text, image_path=None):
         combined = torch.cat([text_embedding, image_embedding], dim=1)
         return combined.squeeze().numpy()
 
+
+#TODO: Fix the functionality
 def embed_text_only(text):
     inputs = processor(text=[text], return_tensors="pt", padding=True)
     with torch.no_grad():
