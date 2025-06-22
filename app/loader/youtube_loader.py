@@ -100,7 +100,9 @@ def load_youtube_data(url: str):
                     "text": text,
                     "image_url": image_url,
                     "start_time": start,
+                    "end_time": entry["end"],
                     "video_id": video_id,
+                    "youtube_url": f"https://www.youtube.com/watch?v={video_id}",
                     "title": title,
                     "source": "youtube",
                 }
