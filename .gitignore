@@ -2,3 +2,7 @@ venv/
 /.env
 __pycache__/
 storage/
+/faiss_mm.index
+/faiss_text.index
+/mm_map.pkl
+/text_map.pkl

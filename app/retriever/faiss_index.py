@@ -5,7 +5,7 @@ import pickle
 import json
 
 TEXT_DIM = 512
-MM_DIM = 1024
+MM_DIM = 512
 
 text_index = None
 mm_index = None

@@ -5,27 +5,6 @@ import requests
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 model = genai.GenerativeModel("gemini-2.0-flash")
 
-# def generate_answer_from_gemini(contexts, query):
-#     prompt = f"""
-#                 [INSTRUKSI]
-#                 Berikut ini adalah potongan transkrip video dan gambar yang berkaitan dengan pertanyaan user.
-#                 Berdasarkan informasi ini, jawablah pertanyaan user secara jelas dan ringkas.
-
-#                 [PERTANYAAN USER]
-#                 {query}
-
-#                 [KONTEKS VIDEO]
-#             """
-#     for ctx in contexts:
-#         text = ctx.get("text", "")
-#         source = ctx.get("source", "tidak diketahui")
-#         prompt += f"- {text} (sumber: {source})\n"
-
-#     prompt += "\n[JAWABAN]\n"
-
-#     res = model.generate_content(prompt)
-#     return {"answer": res.text, "evidence": contexts}
-
 def generate_answer_from_gemini(contexts, query):
     parts = []
 

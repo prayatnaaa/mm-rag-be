@@ -11,20 +11,36 @@ tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
 MAX_TOKENS = 72
 
 def embed_text_image(text, image_path=None):
+    """
+    Menghasilkan embedding teks dan gambar secara terpisah.
+    Cocok untuk indexing multimodal atau analisis isi video/gambar berbasis query teks.
+
+    Return:
+        dict: {
+            'text_embedding': np.ndarray,
+            'image_embedding': np.ndarray
+        }
+    """
+    # Siapkan gambar
     if isinstance(image_path, Image.Image):
         image = image_path
     elif image_path is not None:
         image = Image.open(image_path).convert("RGB")
     else:
-        image = Image.new("RGB", (224, 224), (255, 255, 255)) 
-    
+        image = Image.new("RGB", (224, 224), (255, 255, 255))  # fallback
+
+    # Proses input
     inputs = processor(text=[text], images=image, return_tensors="pt", padding=True)
+
     with torch.no_grad():
         outputs = model(**inputs)
-        text_embedding = outputs.text_embeds
-        image_embedding = outputs.image_embeds
-        combined = torch.cat([text_embedding, image_embedding], dim=1)
-        return combined.squeeze().numpy()
+        text_embedding = outputs.text_embeds.squeeze().numpy()
+        image_embedding = outputs.image_embeds.squeeze().numpy()
+
+    return {
+        "text_embedding": text_embedding,
+        "image_embedding": image_embedding
+    }
 
 
 #TODO: Fix the functionality
