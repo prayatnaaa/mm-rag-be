@@ -120,7 +120,7 @@ def search_similar_chunks(query_vec, top_k=5, allowed_source_ids=None):
 
     print(f"🔍 Top {min(len(results_sorted), top_k)} results (sorted by distance):")
     for r in results_sorted[:top_k]:
-        print(f" - {r['title']} | video_id: {r['video_id']} | distance: {r['distance']:.4f}")
+        print(f" - {r['title']} | video_id: {r['video_id']} | distance: {r['distance']:.4f} | image_url: {r.get('image_url', None)}")
 
     return results_sorted[:top_k]
 

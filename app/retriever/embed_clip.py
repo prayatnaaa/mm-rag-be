@@ -4,10 +4,12 @@ import torch
 import base64
 from io import BytesIO
 import requests
+from sentence_transformers import SentenceTransformer
 
 model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
 processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
+text_encoder = SentenceTransformer("sentence-transformers/gtr-t5-base")
 MAX_TOKENS = 72
 
 def embed_text_image(text, image_path=None):
@@ -43,12 +45,8 @@ def embed_text_image(text, image_path=None):
     }
 
 
-#TODO: Fix the functionality
 def embed_text_only(text):
-    inputs = processor(text=[text], return_tensors="pt", padding=True)
-    with torch.no_grad():
-        output = model.get_text_features(**inputs)
-    return output.squeeze().numpy()
+    return text_encoder.encode(text, normalize_embeddings=True)
 
 
 def embed_image_only(image_src):

@@ -7,7 +7,7 @@ from app.db.metadata_store import (
     list_sources, delete_source, set_active_status, get_active_sources, delete_all_sources
 )
 from app.loader.web_loader import load_web_data
-from app.rag_pipeline import run_rag_pipeline
+from app.agent_executor import AgentExecutor
 from app.utils.minio_client import upload_bytes_to_minio
 from app.utils.file_utils import generate_source_id
 from typing import Optional
@@ -90,12 +90,11 @@ async def query(
 ):
     image_path = None
     if image:
-        # Simpan image sementara kalau diperlukan
         image_path = f"/tmp/{image.filename}"
         with open(image_path, "wb") as f:
             f.write(await image.read())
 
-    return run_rag_pipeline(question, image_path=image_path)
+    return AgentExecutor(question, image_path=image_path)
 
 @router.post("/source/upload")
 def upload_source(file: UploadFile = File(...), source_id: str = Form(None)):

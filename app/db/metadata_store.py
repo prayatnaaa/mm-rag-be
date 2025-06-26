@@ -2,6 +2,8 @@ import json
 import os
 from datetime import datetime
 import numpy as np
+from collections import defaultdict
+from typing import Optional
 
 from app.retriever.faiss_index import (
     text_map,
@@ -15,6 +17,20 @@ from app.retriever.faiss_index import (
 
 DB_FILE = "storage/db.json"
 
+def get_chunk_counts_per_source(source_ids: Optional[list] = None):
+    """
+    Return dict: {source_id: chunk_count} from metadata storage (db.json).
+    """
+    data = _load_metadata()
+    counts = defaultdict(int)
+
+    for source_id, meta in data.items():
+        if source_ids is not None and source_id not in source_ids:
+            continue
+        embedding_ids = meta.get("embedding_ids", [])
+        counts[source_id] = len(embedding_ids)
+
+    return dict(counts)
 
 def _load_metadata():
     if os.path.exists(DB_FILE):
