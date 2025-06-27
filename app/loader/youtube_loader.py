@@ -5,12 +5,12 @@ import yt_dlp
 from fastapi import HTTPException
 from moviepy.editor import VideoFileClip
 from faster_whisper import WhisperModel
-
 from app.utils.file_utils import save_frame
 from app.retriever.embed_clip import embed_text_image
-from app.retriever.faiss_index import add_embedding, save_faiss_indices
+from app.retriever.chromadb_index import add_embedding
 from app.db.metadata_store import save_source
-from app.utils.minio_client import upload_image
+from app.utils.minio_client import upload_image, upload_video
+import concurrent.futures
 
 
 def transcribe_audio_whisper(audio_path: str):
@@ -37,12 +37,14 @@ def load_youtube_data(url: str):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
 
-        print("[INFO] Done YDL")
         video_id = info["id"]
         title = info["title"]
         source_id = f"yt_{video_id}"
         video_filename = f"{video_id}.mp4"
         video_path = os.path.join(temp_dir, video_filename)
+
+        object_name = f"videos/{video_filename}"
+        upload_video(video_path, object_name)
 
         audio_path = os.path.join(temp_dir, "audio.mp3")
         extract_audio(video_path, audio_path)
@@ -50,50 +52,43 @@ def load_youtube_data(url: str):
         transcript = transcribe_audio_whisper(audio_path)
         print(f"[DEBUG] Transcribed {len(transcript)} segments.")
 
-        cap = cv2.VideoCapture(video_path)
+        cap = cv2.VideoCapture(os.path.join(temp_dir, video_filename))
         fps = cap.get(cv2.CAP_PROP_FPS)
-        frame_interval = max(1, int(fps * 10))
-        frames = []
-        count, success = 0, True
 
-        while success:
-            success, image = cap.read()
-            if success and count % frame_interval == 0:
-                local_frame_path = os.path.join(temp_dir, f"frame_{count}.jpg")
-                save_frame(image, local_frame_path)
+        frame_map = {} 
 
-                if os.path.exists(local_frame_path):
-                    object_name = f"{source_id}/frame_{count}.jpg"
-                    frames.append((count / fps, local_frame_path, object_name))
-                else:
-                    print(f"[WARN] Frame not saved: {local_frame_path}")
-            count += 1
-        cap.release()
-
-        print(f"[DEBUG] Extracted {len(frames)} frames.")
-
-        if not frames:
-            raise HTTPException(status_code=500, detail="No frames extracted from the video.")
-
-        embeddings = []
         for entry in transcript:
-            text = entry["text"]
             start = entry["start"]
-            print(f"[DEBUG] Processing segment: '{text[:30]}...' @ {start:.2f}s")
+            frame_number = int(fps * start)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+            success, image = cap.read()
+            if success:
+                frame_path = os.path.join(temp_dir, f"frame_{frame_number}.jpg")
+                save_frame(image, frame_path)
+                frame_map[start] = frame_path
+            else:
+                print(f"[WARN] Failed to read frame at {start:.2f}s")
 
-            closest_frame = min(frames, key=lambda f: abs(f[0] - start))
-            local_path = closest_frame[1]
-            object_name = closest_frame[2]
+        cap.release()
+        os.remove(video_path)
+        os.remove(audio_path)
 
-            if not os.path.exists(local_path):
-                print(f"[ERROR] Frame file missing: {local_path}")
-                continue
+        print(f"[DEBUG] Extracted {len(frame_map)} frames.")
+
+        if not frame_map:
+            raise HTTPException(status_code=500, detail="No frames extracted.")
+
+        def process_entry(entry):
+            start = entry["start"]
+            text = entry["text"]
+            local_path = frame_map.get(start)
+            if not local_path or not os.path.exists(local_path):
+                return None
 
             try:
+                object_name = f"{source_id}/frame_{int(fps * start)}.jpg"
                 image_url = upload_image(local_path, object_name)
-                print(f"[DEBUG] Upload success: {image_url}")
                 vec = embed_text_image(text, local_path)
-                print(f"[DEBUG] Embedding shapes - text: {vec['text_embedding'].shape}, image: {vec['image_embedding'].shape}")
 
                 metadata = {
                     "source_id": source_id,
@@ -109,19 +104,22 @@ def load_youtube_data(url: str):
 
                 eid_text = add_embedding(vec["text_embedding"], metadata | {"modality": "text"})
                 eid_image = add_embedding(vec["image_embedding"], metadata | {"modality": "image"})
-                print(f"[DEBUG] Added embeddings: {eid_text}, {eid_image}")
-                embeddings.extend([eid_text, eid_image])
 
+                return [eid_text, eid_image]
             except Exception as e:
-                print(f"[ERROR] Failed to embed segment @ {start:.2f}s: {e}")
-                continue
-
+                return None
             finally:
                 if os.path.exists(local_path):
                     os.remove(local_path)
 
+        embeddings = []
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            results = list(executor.map(process_entry, transcript))
+            for result in results:
+                if result:
+                    embeddings.extend(result)
+
         print(f"[INFO] Total valid chunks: {len(embeddings)}")
         save_source(source_id, f"s3://{source_id}/", title, embeddings)
-        save_faiss_indices()
 
         return {"status": "ok", "title": title, "chunks": len(embeddings)}
