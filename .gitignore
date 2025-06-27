@@ -6,3 +6,4 @@ storage/
 /faiss_text.index
 /mm_map.pkl
 /text_map.pkl
+chromadb/
