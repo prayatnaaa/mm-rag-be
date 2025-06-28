@@ -3,58 +3,62 @@ import cv2
 import tempfile
 import yt_dlp
 import subprocess
-from faster_whisper import WhisperModel
 from moviepy.editor import VideoFileClip
+from faster_whisper import WhisperModel
 from app.utils.file_utils import save_frame
 from app.retriever.chromadb_index import add_embedding, embed_text, embed_image
 from app.db.metadata_store import save_source
 from app.utils.minio_client import upload_image, upload_video
-import concurrent.futures
 import re
 
-def chunk_transcript(transcript, max_duration=30.0, max_chars=400):
+def clean_metadata(meta: dict):
+    return {k: v for k, v in meta.items() if v is not None}
+
+def is_logical_break(text):
+    # Cek apakah teks diakhiri dengan titik atau simbol kalimat selesai
+    return bool(re.search(r"[.!?…]['”\"]?\s*$", text.strip()))
+
+def chunk_transcript(transcript, max_duration=30.0, max_chars=500):
     chunks = []
     current_chunk = []
     current_text = ""
     start_time = None
     end_time = None
 
-    def is_logical_break(text):
-        return bool(re.search(r"[.!?…](['”\"])?\s*$", text.strip()))
-
     for seg in transcript:
         seg_text = seg["text"].strip()
+        seg_start = seg["start"]
+        seg_end = seg["end"]
 
         if not current_chunk:
-            start_time = seg["start"]
+            start_time = seg_start
 
+        # Gabungkan teks untuk evaluasi panjang
         proposed_text = (current_text + " " + seg_text).strip() if current_text else seg_text
-        proposed_duration = seg["end"] - start_time
+        proposed_duration = seg_end - start_time
         proposed_length = len(proposed_text)
 
-        # Logika utama pemotongan chunk:
-        should_break = (
-            (proposed_length > max_chars or proposed_duration > max_duration)
-            and is_logical_break(current_text)
-        )
+        current_chunk.append(seg)
+        current_text = proposed_text
+        end_time = seg_end
 
-        if should_break:
+        # Cek apakah harus dipotong di sini
+        if (
+            (proposed_length >= max_chars or proposed_duration >= max_duration)
+            and is_logical_break(seg_text)
+        ):
             chunks.append({
                 "text": current_text.strip(),
                 "start": start_time,
                 "end": end_time,
             })
-            current_chunk = [seg]
-            current_text = seg_text
-            start_time = seg["start"]
-        else:
-            current_chunk.append(seg)
-            current_text = proposed_text
-
-        end_time = seg["end"]
+            current_chunk = []
+            current_text = ""
+            start_time = None
+            end_time = None
 
     # Tambahkan sisa chunk terakhir
-    if current_text:
+    if current_chunk:
         chunks.append({
             "text": current_text.strip(),
             "start": start_time,
@@ -63,12 +67,6 @@ def chunk_transcript(transcript, max_duration=30.0, max_chars=400):
 
     return chunks
 
-def transcribe_audio_whisper(audio_path: str):
-    print(f"[INFO] Transcribing audio: {audio_path}")
-    model = WhisperModel("base", compute_type="int8")
-    segments, _ = model.transcribe(audio_path)
-    return [{"text": seg.text.strip(), "start": seg.start, "end": seg.end} for seg in segments]
-
 def extract_audio(video_path: str, audio_path: str):
     print(f"[INFO] Extracting audio with ffmpeg: {video_path}")
     cmd = [
@@ -76,6 +74,31 @@ def extract_audio(video_path: str, audio_path: str):
         "-vn", "-acodec", "mp3", audio_path
     ]
     subprocess.run(cmd, check=True)
+
+def extract_frames_every_n_seconds(video_path, output_dir, fps, interval=2):
+    cap = cv2.VideoCapture(video_path)
+    frame_map = {}
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    frame_interval = int(fps * interval)
+
+    for frame_no in range(0, total_frames, frame_interval):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
+        success, frame = cap.read()
+        if success:
+            timestamp = frame_no / fps
+            frame_path = os.path.join(output_dir, f"frame_{frame_no}.jpg")
+            save_frame(frame, frame_path)
+            frame_map[round(timestamp, 2)] = frame_path
+        else:
+            print(f"[WARN] Could not extract frame at {frame_no}.")
+    cap.release()
+    return frame_map
+
+def transcribe_audio_whisper(audio_path: str):
+    print(f"[INFO] Transcribing audio: {audio_path}")
+    model = WhisperModel("base", compute_type="int8")
+    segments, _ = model.transcribe(audio_path)
+    return [{"text": seg.text.strip(), "start": seg.start, "end": seg.end} for seg in segments]
 
 def load_youtube_data(url: str):
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -98,88 +121,76 @@ def load_youtube_data(url: str):
 
         upload_video(video_path, object_name)
 
-        # --- Extract Audio & Transcribe ---
+        # --- Audio & Transkrip ---
         audio_path = os.path.join(temp_dir, "audio.mp3")
         extract_audio(video_path, audio_path)
         transcript = transcribe_audio_whisper(audio_path)
-        print(f"[DEBUG] Transcribed {len(transcript)} segments.")
+        chunks = chunk_transcript(transcript, max_duration=30.0)
 
-        # --- Chunk Transcripts (~20s each) ---
-        chunks = chunk_transcript(transcript, max_duration=20.0)
+        # --- Ambil frame setiap 2 detik ---
+        cap = cv2.VideoCapture(video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        cap.release()
+        frame_map = extract_frames_every_n_seconds(video_path, temp_dir, fps, interval=2)
 
-        # --- Ambil fps satu kali ---
-        fps_cap = cv2.VideoCapture(video_path)
-        fps = fps_cap.get(cv2.CAP_PROP_FPS)
-        fps_cap.release()
-
-        # --- Proses tiap chunk secara paralel ---
-        def process_chunk(chunk):
-            start = chunk["start"]
-            end = chunk["end"]
-            midpoint = (start + end) / 2.0
-            frame_number = int(fps * midpoint)
-
-            cap = None
-            frame_path = None
-
-            try:
-                cap = cv2.VideoCapture(video_path)
-                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
-                success, image = cap.read()
-                cap.release()
-
-                if not success:
-                    return None
-
-                frame_path = os.path.join(temp_dir, f"frame_{frame_number}.jpg")
-                save_frame(image, frame_path)
-
-                image_object_name = f"{source_id}/frame_{frame_number}.jpg"
-                image_url = upload_image(frame_path, image_object_name)
-
-                text_vec = embed_text(chunk["text"])
-                image_vec = embed_image(frame_path)
-
-                metadata = {
-                    "source_id": source_id,
-                    "text": chunk["text"],
-                    "image_url": image_url,
-                    "start_time": start,
-                    "end_time": end,
-                    "video_id": video_id,
-                    "youtube_url": f"https://www.youtube.com/watch?v={video_id}",
-                    "title": title,
-                    "source": "youtube",
-                    "active": True,
-                }
-
-                eid_text = add_embedding(text_vec, metadata | {"modality": "text"})
-                eid_image = add_embedding(image_vec, metadata | {"modality": "image"})
-
-                return [eid_text, eid_image]
-
-            except Exception as e:
-                print(f"[ERROR] Failed to process chunk: {e}")
-                return None
-
-            finally:
-                if cap:
-                    cap.release()
-                if frame_path and os.path.exists(frame_path):
-                    os.remove(frame_path)
-
+        # --- Embedding teks dan gambar ---
         embeddings = []
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            results = list(executor.map(process_chunk, chunks))
-            for result in results:
-                if result:
-                    embeddings.extend(result)
+
+        for chunk in chunks:
+            # --- TEXT EMBEDDING ---
+            if chunk["start"] is None or chunk["end"] is None:
+                print(f"[WARN] Skipping chunk with missing timestamps: {chunk}")
+                continue
+            text_vec = embed_text(chunk["text"])
+            text_meta = {
+                "source_id": source_id,
+                "text": chunk["text"],
+                "start_time": chunk["start"],
+                "end_time": chunk["end"],
+                "video_id": video_id,
+                "youtube_url": f"https://www.youtube.com/watch?v={video_id}",
+                "title": title,
+                "source": "youtube",
+                "active": True,
+            }
+            eid_text = add_embedding(text_vec, clean_metadata(text_meta | {"modality": "text"}))
+            embeddings.append(eid_text)
+
+            # --- IMAGE EMBEDDING: frame dalam interval chunk ---
+            for ts, frame_path in frame_map.items():
+                if chunk["start"] <= ts <= chunk["end"]:
+                    try:
+                        frame_no = int(ts * fps)
+                        image_object_name = f"{source_id}/frame_{frame_no}.jpg"
+                        image_url = upload_image(frame_path, image_object_name)
+
+                        if not image_url:
+                            print(f"[WARN] Skipping image embedding at {ts} (upload_image returned None)")
+                            continue
+
+                        image_vec = embed_image(frame_path)
+                        image_meta = {
+                            "source_id": source_id,
+                            "image_url": image_url,
+                            "start_time": ts,
+                            "end_time": ts,
+                            "video_id": video_id,
+                            "youtube_url": f"https://www.youtube.com/watch?v={video_id}",
+                            "title": title,
+                            "source": "youtube",
+                            "active": True,
+                        }
+                        eid_image = add_embedding(image_vec, clean_metadata(image_meta | {"modality": "image"}))
+                        embeddings.append(eid_image)
+
+                    except Exception as e:
+                        print(f"[ERROR] image embedding failed: {e}")
 
         # Cleanup
         os.remove(video_path)
         os.remove(audio_path)
 
-        print(f"[INFO] Total valid chunks: {len(embeddings)}")
+        print(f"[INFO] Total embeddings: {len(embeddings)}")
         save_source(source_id, f"s3://{source_id}/", title, embeddings)
 
         return {"status": "ok", "title": title, "chunks": len(embeddings)}
