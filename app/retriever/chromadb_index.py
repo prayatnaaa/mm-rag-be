@@ -5,35 +5,25 @@ from PIL import Image
 import torch
 import numpy as np
 
+# Load CLIP model dan processor
 model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
 processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
 
 MAX_TOKENS = 72
 
+# Inisialisasi ChromaDB client
 client = chromadb.PersistentClient(path="./chromadb")
-
 collection = client.get_or_create_collection(name="embeddings", embedding_function=None)
 
-# def embed_text_image(text: str, image_path=None) -> dict:
-#     if isinstance(image_path, Image.Image):
-#         image = image_path
-#     elif image_path is not None:
-#         image = Image.open(image_path).convert("RGB")
-#     else:
-#         image = Image.new("RGB", (224, 224), (255, 255, 255))
+# ✅ Fungsi untuk normalisasi L2 (agar dot product = cosine similarity)
+def normalize(vec: np.ndarray) -> np.ndarray:
+    norm = np.linalg.norm(vec)
+    if norm == 0:
+        return vec
+    return vec / norm
 
-#     text_embedding = emb_fn([text])[0] 
-
-#     inputs = processor(images=image, return_tensors="pt")
-#     with torch.no_grad():
-#         image_embedding = model.get_image_features(**inputs).squeeze().numpy()
-
-#     return {
-#         "text_embedding": np.array(text_embedding),
-#         "image_embedding": image_embedding
-#     }
-
+# 🔤 Embedding teks dengan normalisasi
 def embed_text(text: str, truncate=True) -> np.ndarray:
     if truncate:
         tokens = tokenizer.tokenize(text)
@@ -44,8 +34,9 @@ def embed_text(text: str, truncate=True) -> np.ndarray:
     inputs = processor(text=[text], return_tensors="pt", padding=True, truncation=True)
     with torch.no_grad():
         embedding = model.get_text_features(**inputs).squeeze().numpy()
-    return embedding
+    return normalize(embedding)
 
+# 🖼️ Embedding gambar dengan normalisasi
 def embed_image(image_path: str | Image.Image) -> np.ndarray:
     if isinstance(image_path, Image.Image):
         image = image_path
@@ -55,9 +46,10 @@ def embed_image(image_path: str | Image.Image) -> np.ndarray:
     inputs = processor(images=image, return_tensors="pt")
     with torch.no_grad():
         embedding = model.get_image_features(**inputs).squeeze().numpy()
-    return embedding
+    return normalize(embedding)
 
-def add_embedding(vec, metadata): 
+# ➕ Menambahkan embedding ke ChromaDB
+def add_embedding(vec: np.ndarray, metadata: dict) -> str:
     if "source_id" not in metadata and "video_id" in metadata:
         metadata["source_id"] = f"yt_{metadata['video_id']}"
 
@@ -71,6 +63,7 @@ def add_embedding(vec, metadata):
     )
     return doc_id
 
+# 🔍 Pencarian berdasarkan teks query
 def search(query: str, n_results=5, modality=None):
     query_embedding = embed_text(query)
     results = collection.query(
@@ -78,5 +71,4 @@ def search(query: str, n_results=5, modality=None):
         n_results=n_results,
         where={"modality": modality} if modality else None
     )
-    
     return results
