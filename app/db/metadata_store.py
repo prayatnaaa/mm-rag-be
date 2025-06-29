@@ -1,135 +1,98 @@
-import json
-import os
 from datetime import datetime
-import numpy as np
-from collections import defaultdict
 from typing import Optional
+from collections import defaultdict
 
-from app.retriever.faiss_index import (
-    text_map,
-    mm_map,
-    save_faiss_index,
-    load_faiss_index,
-    init_indices,
-    text_index,
-    mm_index,
-)
-
-DB_FILE = "storage/db.json"
-
-def get_chunk_counts_per_source(source_ids: Optional[list] = None):
-    """
-    Return dict: {source_id: chunk_count} from metadata storage (db.json).
-    """
-    data = _load_metadata()
-    counts = defaultdict(int)
-
-    for source_id, meta in data.items():
-        if source_ids is not None and source_id not in source_ids:
-            continue
-        embedding_ids = meta.get("embedding_ids", [])
-        counts[source_id] = len(embedding_ids)
-
-    return dict(counts)
-
-def _load_metadata():
-    if os.path.exists(DB_FILE):
-        with open(DB_FILE, "r") as f:
-            return json.load(f)
-    return {}
+from app.retriever.chromadb_index import collection
 
 
-def _save_metadata(data):
-    with open(DB_FILE, "w") as f:
-        json.dump(data, f, indent=2)
-
-
-def save_source(source_id, path, title, embedding_ids):
-    data = _load_metadata()
-    data[source_id] = {
-        "path": path,
-        "title": title,
-        "embedding_ids": embedding_ids,
-        "active": True,
-        "created_at": datetime.utcnow().isoformat(),
-    }
-    _save_metadata(data)
+def save_source(source_id: str, path: str, title: str, embedding_ids: list[str]):
+    print(f"[CHROMADB] Saved source: {source_id} with {len(embedding_ids)} embeddings")
 
 
 def list_sources():
-    return _load_metadata()
+    results = collection.get(include=["metadatas"])
+    sources = {}
+
+    for meta in results["metadatas"]:
+        sid = meta.get("source_id", "unknown")
+        modality = meta.get("modality", "unknown") 
+
+        # Buat list per source_id
+        if sid not in sources:
+            sources[sid] = []
+
+        # Tambahkan setiap metadata ke list source_id-nya
+        sources[sid].append({
+            "title": meta.get("title"),
+            "text": meta.get("text"),
+            "source": meta.get("youtube_url"),
+            "image_url": meta.get("image_url"),
+            "start_time": meta.get("start_time"),
+            "end_time": meta.get("end_time"),
+            "created_at": meta.get("created_at", ""),
+            "active": meta.get("active"),
+            "modality": modality,
+        })
+
+    return sources
+
+def get_active_sources():
+    results = collection.get(where={"active": True}, include=["metadatas"])
+    print(f"RESULTS: {results}")
+    return {m["source_id"]: m for m in results["metadatas"]}
+
+
+def set_active_status(source_id: str, is_active: bool):
+    # Update status by filtering and rewriting metadata
+    results = collection.get(where={"source_id": source_id}, include=["metadatas", "ids"])
+    if not results["ids"]:
+        return False
+
+    for i, cid in enumerate(results["ids"]):
+        metadata = results["metadatas"][i]
+        metadata["active"] = is_active
+        collection.update(ids=[cid], metadatas=[metadata])
+    return True
 
 
 def delete_source(source_id):
-    data = _load_metadata()
-    if source_id not in data:
+    try:
+        result = collection.get(where={"source_id": source_id}, include=[])
+        ids_to_delete = result["ids"]
+        if not ids_to_delete:
+            return False
+
+        collection.delete(ids=ids_to_delete)
+        print(f"🗑️ Deleted source and embeddings: {source_id}")
+        return True
+    except Exception as e:
+        print(f"Failed to delete source: {e}")
         return False
 
-    load_faiss_index()
-
-    embedding_ids = data[source_id].get("embedding_ids", [])
-
-    text_ids = []
-    mm_ids = []
-
-    for eid in embedding_ids:
-        if eid in text_map:
-            index = int(list(text_map.keys()).index(eid))
-            text_ids.append(index)
-            del text_map[eid]
-        elif eid in mm_map:
-            index = int(list(mm_map.keys()).index(eid))
-            mm_ids.append(index)
-            del mm_map[eid]
-
-    if text_index and text_ids:
-        text_index.remove_ids(np.array(text_ids, dtype=np.int64))
-    if mm_index and mm_ids:
-        mm_index.remove_ids(np.array(mm_ids, dtype=np.int64))
-
-    save_faiss_index()
-
-    del data[source_id]
-    _save_metadata(data)
-    print(f"🗑️ Deleted source and embeddings: {source_id}")
-    return True
 
 
 def delete_all_sources():
-    data = _load_metadata()
-    if not data:
+    try:
+        all_ids = collection.get(include=[])["ids"]
+        if not all_ids:
+            return False
+        collection.delete(ids=all_ids)
+        print("Deleted all sources and cleared ChromaDB.")
+        return {"message": "All sources deleted successfully."}
+    except Exception as e:
+        print(f"Failed to delete all: {e}")
         return False
 
-    load_faiss_index()
 
-    text_map.clear()
-    mm_map.clear()
 
-    if text_index is not None:
-        text_index.reset()
+def get_chunk_counts_per_source(source_ids: Optional[list] = None):
+    if source_ids:
+        all_data = collection.get(where={"source_id": {"$in": source_ids}}, include=[])
     else:
-        init_indices()
+        all_data = collection.get(include=[])
 
-    if mm_index is not None:
-        mm_index.reset()
-    else:
-        init_indices()
+    counts = {}
+    for sid in [meta["source_id"] for meta in all_data["metadatas"]]:
+        counts[sid] = counts.get(sid, 0) + 1
 
-    save_faiss_index()
-    _save_metadata({})
-    print("🧹 Deleted all sources and cleared FAISS.")
-    return True
-
-
-def set_active_status(source_id, is_active: bool):
-    data = _load_metadata()
-    if source_id in data:
-        data[source_id]["active"] = is_active
-        _save_metadata(data)
-        return True
-    return False
-
-
-def get_active_sources():
-    data = _load_metadata()
-    return {sid: meta for sid, meta in data.items() if meta.get("active", True)}
+    return counts

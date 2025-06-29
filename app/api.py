@@ -1,6 +1,7 @@
 import os
 from fastapi import APIRouter, File, UploadFile, Form, HTTPException
 from app.loader.youtube_loader import load_youtube_data
+from app.retriever.chromadb_index import search
 from app.db.metadata_store import (
     list_sources, delete_source, set_active_status, get_active_sources, delete_all_sources
 )
@@ -55,3 +56,19 @@ async def query(
             f.write(await image.read())
 
     return AgentExecutor(question, image_path=image_path)
+
+@router.post("/test-query")
+async def test_query(question: str = Form(...)):
+    """
+    Test query endpoint for debugging purposes.
+    """
+    if not question:
+        raise HTTPException(status_code=400, detail="Question cannot be empty")
+    
+    search_text = search(question, n_results=5, modality="text")
+    search_image = search(question, n_results=5, modality="image")
+
+    return {
+        "text_results": search_text,
+        "image_results": search_image
+    }

@@ -3,8 +3,6 @@ import hashlib
 import requests
 from typing import Optional
 from dotenv import load_dotenv
-from collections import defaultdict
-
 from app.retriever.embed_clip import embed_text_image
 from app.retriever.faiss_index import search_similar_chunks
 from app.db.metadata_store import get_active_sources, get_chunk_counts_per_source

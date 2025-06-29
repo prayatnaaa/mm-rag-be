@@ -31,6 +31,16 @@ def upload_image(local_path, object_name):
     )
     return f"http://{MINIO_ENDPOINT}/{MINIO_BUCKET}/{object_name}"
 
+def upload_video(local_path, object_name):
+    ensure_bucket_exists()
+    client.fput_object(
+        bucket_name=MINIO_BUCKET,
+        object_name=object_name,
+        file_path=local_path,
+        content_type="video/mp4"
+    )
+    return f"http://{MINIO_ENDPOINT}/{MINIO_BUCKET}/{object_name}"
+
 def get_file_stream_from_minio(object_name: str) -> BytesIO:
     obj = client.get_object(MINIO_BUCKET, object_name)
     content = BytesIO(obj.read())
@@ -39,11 +49,9 @@ def get_file_stream_from_minio(object_name: str) -> BytesIO:
     return content
 
 def upload_bytes_to_minio(file_bytes: bytes, object_name: str, content_type: str):
-    # Pastikan bucket sudah ada
     if not client.bucket_exists(MINIO_BUCKET):
         client.make_bucket(MINIO_BUCKET)
 
-    # Upload bytes sebagai objek di MinIO
     client.put_object(
         bucket_name=MINIO_BUCKET,
         object_name=object_name,
