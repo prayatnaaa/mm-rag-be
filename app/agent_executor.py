@@ -1,128 +1,71 @@
 import os
 import json
-import requests
-from dotenv import load_dotenv
-import re
-from difflib import SequenceMatcher
-
-
-load_dotenv()
+from typing import List, Dict, Optional
+from datetime import datetime
 import google.generativeai as genai
+from dotenv import load_dotenv
+load_dotenv()
+
+from retriever.chromadb_index import search
+
+# ✅ Konfigurasi Gemini 2.0 Flash
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+llm = genai.GenerativeModel("gemini-2.0-flash")
 
-from app.rag_pipeline import run_rag_pipeline
-from app.db.metadata_store import get_active_sources
+# ✅ Prompt Template
+BASE_PROMPT = """You are an expert assistant. Below are information chunks retrieved from multiple video transcripts and image links that may help answer the user's question.
 
-# ====================================
-# Gemini model setup
-# ====================================
-model = genai.GenerativeModel("gemini-2.0-flash")
+Your task is to analyze these snippets and image references to provide a clear, concise, and informative answer to the user. Consider both text and image context. If image URLs are included, assume that the image is relevant and try to infer its meaning from the text and surrounding context. Prioritize accurate and reasoned answers over speculation. If multiple answers are possible, summarize or compare them.
 
-# ====================================
-# Tools
-# ====================================
+[QUESTION]
+{query}
 
-def list_sources():
-    """Return list of active source IDs."""
-    sources = get_active_sources()
-    return {"sources": list(sources.keys())}
-
-
-def rag_query(query: str, image_path: str = None):
-    """Run full multimodal RAG pipeline."""
-    return run_rag_pipeline(query, image_path=image_path)
-
-def extract_source_hint(query: str):
-    """Coba temukan source_id berdasarkan kemiripan judul."""
-    sources = get_active_sources()
-    best_match = None
-    highest_score = 0.0
-    for source_id, meta in sources.items():
-        title = meta.get("title", "").lower()
-        if not title:
-            continue
-        score = SequenceMatcher(None, query.lower(), title).ratio()
-        if score > highest_score and score > 0.6:
-            best_match = source_id
-            highest_score = score
-    return best_match
-
-
-
-# ====================================
-# Tool descriptions for prompting
-# ====================================
-
-tool_descriptions = {
-    "list_sources": "Mengembalikan daftar sumber aktif yang tersedia.",
-    "rag_query": "Menjawab pertanyaan user berdasarkan isi video dan/atau gambar. Argumen: query (str), image_path (opsional, path ke gambar lokal).",
-}
-
-
-# ====================================
-# Prompt builder
-# ====================================
-
-def build_agent_prompt(user_query: str):
-    """Generate prompt to let Gemini choose which function to use."""
-    prompt = f"""
-Kamu adalah asisten cerdas untuk menjawab pertanyaan berdasarkan video dan gambar. Berikut adalah daftar fungsi yang dapat kamu gunakan:
-
-{json.dumps(tool_descriptions, indent=2)}
-
-Pertanyaan user:
-\"\"\"{user_query}\"\"\"
-
-Tentukan fungsi yang paling relevan untuk menjawab pertanyaan tersebut. Balas hanya dalam format JSON berikut tanpa tambahan teks apapun:
-
-{{
-  "function": "nama_fungsi",
-  "arguments": {{
-    ...
-  }}
-}}
-
-Jika tidak tahu, gunakan fungsi 'rag_query' sebagai default.
 """
+
+# ✅ Prompt builder
+def build_prompt(query: str, contexts: List[Dict]) -> str:
+    prompt = BASE_PROMPT.format(query=query)
+
+    for i, ctx in enumerate(contexts):
+        text = ctx.get("text", "(no text)")
+        meta = ctx.get("metadata", {})
+        source = meta.get("source_id", "unknown")
+        image_url = meta.get("image_url", None)
+
+        prompt += f"\n[CONTEXT {i+1}]\n"
+        prompt += f"- Text: {text.strip()[:200]}...\n"
+        prompt += f"- Source: {source}\n"
+        if image_url:
+            prompt += f"- Image URL: {image_url}\n"
+
     return prompt
 
+# ✅ Agentic RAG
+def run_agentic_rag(query: str, n_chunks: int = 15) -> Dict:
+    results = search(query, n_results=n_chunks)
+    contexts = []
 
-# ====================================
-# Agent Executor
-# ====================================
+    for doc, meta, dist in zip(results["documents"], results["metadatas"], results["distances"]):
+        contexts.append({
+            "text": doc,
+            "metadata": meta,
+            "distance": dist
+        })
 
-def clean_json_response(text):
-    cleaned = re.sub(r"^```json\s*", "", text)
-    cleaned = re.sub(r"\s*```$", "", cleaned)
-    return cleaned.strip()
-
-def AgentExecutor(user_query: str, image_path: str = None):
-    prompt = build_agent_prompt(user_query)
-    response = model.generate_content(prompt)
-    print("[DEBUG] Function call response:", response.text)
-
-    try:
-        cleaned_text = clean_json_response(response.text)
-        print("[DEBUG] Cleaned response:", cleaned_text)
-        parsed = json.loads(cleaned_text)
-        fn_name = parsed.get("function")
-        args = parsed.get("arguments", {})
-
-
-        # Inject image path if applicable
-        if image_path:
-            args["image_path"] = image_path
-
-        func_map = {
-            "list_sources": list_sources,
-            "rag_query": rag_query,
+    if not contexts:
+        return {
+            "query": query,
+            "answer": "Sorry, I couldn't find any relevant information to answer that.",
+            "used_contexts": []
         }
 
-        if fn_name not in func_map:
-            return {"error": f"Fungsi tidak dikenali: {fn_name}", "raw_response": response.text}
+    prompt = build_prompt(query, contexts)
+    print("📝 Prompt sent to Gemini:\n", prompt[:500], "...")  # Debug cut-off
+    response = llm.generate_content(prompt)
 
-        result = func_map[fn_name](**args)
-        return {"function": fn_name, "result": result}
-
-    except Exception as e:
-        return {"error": str(e), "raw_response": response.text}
+    return {
+        "query": query,
+        "answer": response.text,
+        "used_contexts": contexts,
+        "timestamp": datetime.now().isoformat()
+    }

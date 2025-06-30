@@ -1,30 +1,36 @@
 import chromadb
-from chromadb.utils import embedding_functions
 from transformers import CLIPProcessor, CLIPModel, CLIPTokenizer
 from PIL import Image
 import torch
 import numpy as np
+from deep_translator import GoogleTranslator
 
-# Load CLIP model dan processor
 model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
 processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
 
 MAX_TOKENS = 72
 
-# Inisialisasi ChromaDB client
 client = chromadb.PersistentClient(path="./chromadb")
 collection = client.get_or_create_collection(name="embeddings", embedding_function=None)
 
-# ✅ Fungsi untuk normalisasi L2 (agar dot product = cosine similarity)
 def normalize(vec: np.ndarray) -> np.ndarray:
     norm = np.linalg.norm(vec)
     if norm == 0:
         return vec
     return vec / norm
 
-# 🔤 Embedding teks dengan normalisasi
+
+def translate_to_english(text: str) -> str:
+    try:
+        return GoogleTranslator(source='auto', target='en').translate(text)
+    except Exception as e:
+        print(f"[Translation Error] {e}")
+        return text
+
 def embed_text(text: str, truncate=True) -> np.ndarray:
+    text = translate_to_english(text)
+
     if truncate:
         tokens = tokenizer.tokenize(text)
         if len(tokens) > MAX_TOKENS:
@@ -36,7 +42,6 @@ def embed_text(text: str, truncate=True) -> np.ndarray:
         embedding = model.get_text_features(**inputs).squeeze().numpy()
     return normalize(embedding)
 
-# 🖼️ Embedding gambar dengan normalisasi
 def embed_image(image_path: str | Image.Image) -> np.ndarray:
     if isinstance(image_path, Image.Image):
         image = image_path
@@ -48,7 +53,6 @@ def embed_image(image_path: str | Image.Image) -> np.ndarray:
         embedding = model.get_image_features(**inputs).squeeze().numpy()
     return normalize(embedding)
 
-# ➕ Menambahkan embedding ke ChromaDB
 def add_embedding(vec: np.ndarray, metadata: dict) -> str:
     if "source_id" not in metadata and "video_id" in metadata:
         metadata["source_id"] = f"yt_{metadata['video_id']}"
@@ -63,7 +67,6 @@ def add_embedding(vec: np.ndarray, metadata: dict) -> str:
     )
     return doc_id
 
-# 🔍 Pencarian berdasarkan teks query
 def search(query: str, n_results=5, modality=None):
     query_embedding = embed_text(query)
     results = collection.query(

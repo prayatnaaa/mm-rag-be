@@ -75,7 +75,7 @@ def extract_audio(video_path: str, audio_path: str):
     ]
     subprocess.run(cmd, check=True)
 
-def extract_frames_every_n_seconds(video_path, output_dir, fps, interval=2):
+def extract_frames_every_n_seconds(video_path, output_dir, fps, interval=5):
     cap = cv2.VideoCapture(video_path)
     frame_map = {}
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
