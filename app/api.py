@@ -1,16 +1,13 @@
 import os
 from fastapi import APIRouter, File, UploadFile, Form, HTTPException
 from app.loader.youtube_loader import load_youtube_data
-from app.retriever.chromadb_index import embed_text, embed_image, search
+from app.retriever.chromadb_index import search
 from app.db.metadata_store import (
     list_sources, delete_source, set_active_status, get_active_sources, delete_all_sources
 )
-from app.agent_executor import AgentExecutor
 from typing import Optional
-import io
+from app.agent_executor import run_agentic_rag
 from PIL import Image
-import numpy as np
-from app.retriever.chromadb_index import collection, normalize
 
 router = APIRouter()
 os.makedirs("storage", exist_ok=True)
@@ -48,19 +45,6 @@ def toggle_source(source_id: str, active: bool = Form(...)):
         raise HTTPException(status_code=404, detail="Source not found")
     return {"status": "updated", "active": active}
 
-@router.post("/query")
-async def query(
-    question: str = Form(...), 
-    image: Optional[UploadFile] = File(None)
-):
-    image_path = None
-    if image:
-        image_path = f"/tmp/{image.filename}"
-        with open(image_path, "wb") as f:
-            f.write(await image.read())
-
-    return AgentExecutor(question, image_path=image_path)
-
 # @router.post("/test-query")
 # async def test_query(question: str = Form(...)):
 #     """
@@ -77,50 +61,41 @@ async def query(
 #         "image_results": search_image
 #     }
 
-@router.post("/test-query")
-async def test_query(
-    question: Optional[str] = Form(None),
-    image: Optional[UploadFile] = File(None),
+@router.post("/ask")
+async def ask(    question: str = Form(...),
+    image: Optional[UploadFile] = File(None)
 ):
     """
-    Accepts text, image, or both, and returns separate search results
-    for text and image collections.
+    Accepts a question and an optional image, returns an answer using the agent executor.
     """
+    if not question:
+        raise HTTPException(status_code=400, detail="Question cannot be empty")
+
+    image_path = None
+    if image:
+        image_path = f"/tmp/{image.filename}"
+        with open(image_path, "wb") as f:
+            f.write(await image.read())
+
+    return search(question, image=image_path, n_results=5)
+
+@router.post("/rag")
+async def rag_pipeline(
+    question: Optional[str] = Form(None),
+    image: Optional[UploadFile] = File(None)
+):
+ 
     if not question and not image:
-        raise HTTPException(status_code=400, detail="Provide either text or image input.")
-
-    query_embeddings = []
-
-    if question:
-        text_embedding = embed_text(question)
-        query_embeddings.append(text_embedding)
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
+    
+    pil_image = None
 
     if image:
-        image_data = await image.read()
-        pil_image = Image.open(io.BytesIO(image_data)).convert("RGB")
-        image_embedding = embed_image(pil_image)
-        query_embeddings.append(image_embedding)
+        if isinstance(image, str):
+            pil_image = Image.open(image).convert("RGB")
+        elif isinstance(image, Image.Image):
+            pil_image = image
+        else:
+            raise ValueError("Invalid image format. Must be path or PIL.Image.")
 
-    # If both text and image were provided, average them for a hybrid search
-    if query_embeddings:
-        combined_embedding = normalize(np.mean(query_embeddings, axis=0))
-    else:
-        raise HTTPException(status_code=400, detail="Failed to compute embedding.")
-
-    # Search separately in both modalities
-    text_results = collection.query(
-        query_embeddings=[combined_embedding.tolist()],
-        n_results=5,
-        where={"modality": "text"}
-    )
-
-    image_results = collection.query(
-        query_embeddings=[combined_embedding.tolist()],
-        n_results=5,
-        where={"modality": "image"}
-    )
-
-    return {
-        "text_results": text_results,
-        "image_results": image_results
-    }
+    return run_agentic_rag(question, image=pil_image, n_chunks=15)

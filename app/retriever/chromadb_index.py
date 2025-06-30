@@ -4,6 +4,7 @@ from PIL import Image
 import torch
 import numpy as np
 from deep_translator import GoogleTranslator
+from typing import Optional
 
 model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
 processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
@@ -67,11 +68,53 @@ def add_embedding(vec: np.ndarray, metadata: dict) -> str:
     )
     return doc_id
 
-def search(query: str, n_results=5, modality=None):
-    query_embedding = embed_text(query)
-    results = collection.query(
-        query_embeddings=[query_embedding.tolist()],
+# def search(query: str, n_results=5, modality=None):
+#     query_embedding = embed_text(query)
+#     results = collection.query(
+#         query_embeddings=[query_embedding.tolist()],
+#         n_results=n_results,
+#         where={"modality": modality} if modality else None
+#     )
+#     return results
+
+def search(query: Optional[str] = None, image: Optional[str | Image.Image] = None, n_results: int = 5):
+
+    if not query and not image:
+        raise ValueError("You must provide at least a text query or an image.")
+
+    query_embeddings = []
+
+    if query:
+        text_embedding = embed_text(query)
+        query_embeddings.append(text_embedding)
+
+    if image:
+        if isinstance(image, str):
+            pil_image = Image.open(image).convert("RGB")
+        elif isinstance(image, Image.Image):
+            pil_image = image
+        else:
+            raise ValueError("Invalid image format. Must be path or PIL.Image.")
+
+        image_embedding = embed_image(pil_image)
+        query_embeddings.append(image_embedding)
+
+    combined_embedding = normalize(np.mean(query_embeddings, axis=0))
+
+    text_results = collection.query(
+        query_embeddings=[combined_embedding.tolist()],
         n_results=n_results,
-        where={"modality": modality} if modality else None
+        where={"modality": "text"}
     )
-    return results
+
+    image_results = collection.query(
+        query_embeddings=[combined_embedding.tolist()],
+        n_results=n_results,
+        where={"modality": "image"}
+    )
+
+    return {
+        "query": query,
+        "text_results": text_results,
+        "image_results": image_results
+    }
