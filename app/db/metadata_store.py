@@ -38,13 +38,11 @@ def list_sources():
 
 def get_active_sources():
     results = collection.get(where={"active": True}, include=["metadatas"])
-    print(f"RESULTS: {results}")
     return {m["source_id"]: m for m in results["metadatas"]}
 
 
 def set_active_status(source_id: str, is_active: bool):
-    # Update status by filtering and rewriting metadata
-    results = collection.get(where={"source_id": source_id}, include=["metadatas", "ids"])
+    results = collection.get(where={"source_id": source_id}, include=["metadatas"])
     if not results["ids"]:
         return False
 

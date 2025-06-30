@@ -70,25 +70,29 @@ def build_prompt(query: str, contexts: List[Dict]) -> str:
 def run_agentic_rag(
     query: str,
     image: Optional[Union[str, Image.Image]] = None,
-    n_chunks: int = 15
+    n_chunks: int = 10  # top-N per modality
 ) -> Dict:
-    # 1) Panggil search multimodal
-    result = search(query=query, image=image, n_results=n_chunks)
+    # 1) Search multimodal
+    result = search(query=query, image=image, n_results=50)  # ambil lebih banyak utk filtering
 
-    # 2) Flatten hasil text dan image
-    text_docs     = result["text_results"]["documents"][0]
-    text_metas    = result["text_results"]["metadatas"][0]
-    text_dists    = result["text_results"]["distances"][0]
+    # 2) Ambil text & image data
+    text_docs   = result["text_results"]["documents"][0]
+    text_metas  = result["text_results"]["metadatas"][0]
+    text_dists  = result["text_results"]["distances"][0]
 
-    image_docs    = result["image_results"]["documents"][0]
-    image_metas   = result["image_results"]["metadatas"][0]
-    image_dists   = result["image_results"]["distances"][0]
+    image_docs  = result["image_results"]["documents"][0]
+    image_metas = result["image_results"]["metadatas"][0]
+    image_dists = result["image_results"]["distances"][0]
 
-    all_docs   = text_docs   + image_docs
-    all_metas  = text_metas  + image_metas
-    all_dists  = text_dists  + image_dists
+    # 3) Ambil top-N berdasarkan distance
+    top_text = sorted(zip(text_docs, text_metas, text_dists), key=lambda x: x[2])[:n_chunks]
+    top_image = sorted(zip(image_docs, image_metas, image_dists), key=lambda x: x[2])[:n_chunks]
 
-    # 3) Deduplicate & build contexts
+    all_docs  = [x[0] for x in top_text + top_image]
+    all_metas = [x[1] for x in top_text + top_image]
+    all_dists = [x[2] for x in top_text + top_image]
+
+    # 4) Deduplicate & build prompt
     contexts = deduplicate_results(all_docs, all_metas, all_dists)
 
     if not contexts:
@@ -98,7 +102,6 @@ def run_agentic_rag(
             "used_contexts": []
         }
 
-    # 4) Build prompt & panggil Gemini
     prompt = build_prompt(query, contexts)
     print("📝 Prompt sent to Gemini:\n", prompt[:500], "...\n")
     response = llm.generate_content(prompt)

@@ -8,6 +8,7 @@ from app.db.metadata_store import (
 from typing import Optional
 from app.agent_executor import run_agentic_rag
 from PIL import Image
+import io
 
 router = APIRouter()
 os.makedirs("storage", exist_ok=True)
@@ -91,11 +92,10 @@ async def rag_pipeline(
     pil_image = None
 
     if image:
-        if isinstance(image, str):
-            pil_image = Image.open(image).convert("RGB")
-        elif isinstance(image, Image.Image):
-            pil_image = image
-        else:
-            raise ValueError("Invalid image format. Must be path or PIL.Image.")
+        try:
+            contents = await image.read()
+            pil_image = Image.open(io.BytesIO(contents)).convert("RGB")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to process image: {str(e)}")
 
     return run_agentic_rag(question, image=pil_image, n_chunks=15)

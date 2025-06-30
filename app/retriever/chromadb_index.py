@@ -104,13 +104,23 @@ def search(query: Optional[str] = None, image: Optional[str | Image.Image] = Non
     text_results = collection.query(
         query_embeddings=[combined_embedding.tolist()],
         n_results=n_results,
-        where={"modality": "text"}
+        where={
+            "$and": [
+                {"modality": {"$eq": "text"}},
+                {"active": {"$eq": True}}
+            ]
+        }
     )
 
     image_results = collection.query(
         query_embeddings=[combined_embedding.tolist()],
         n_results=n_results,
-        where={"modality": "image"}
+        where={
+            "$and": [
+                {"modality": {"$eq": "image"}},
+                {"active": {"$eq": True}}
+            ]
+        }   
     )
 
     return {
