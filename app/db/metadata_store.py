@@ -15,16 +15,24 @@ def list_sources():
 
     for meta in results["metadatas"]:
         sid = meta.get("source_id", "unknown")
-        modality = meta.get("modality", "unknown") 
+        title = meta.get("title", "No Title")
+        isActive = meta.get("active", False)
+        modality = meta.get("modality", "unknown")
 
-        # Buat list per source_id
+        # Inisialisasi struktur awal per source_id
         if sid not in sources:
-            sources[sid] = []
+            sources[sid] = {
+                "source_id": sid,
+                "title": title,
+                "active": isActive,
+                "items": []
+            }
 
-        # Tambahkan setiap metadata ke list source_id-nya
-        sources[sid].append({
-            "title": meta.get("title"),
+        # Tambahkan metadata ke items
+        sources[sid]["items"].append({
             "text": meta.get("text"),
+            "source_id": sid,
+            "title": title,
             "source": meta.get("youtube_url"),
             "image_url": meta.get("image_url"),
             "start_time": meta.get("start_time"),
@@ -34,7 +42,8 @@ def list_sources():
             "modality": modality,
         })
 
-    return sources
+    # Ubah dict menjadi list
+    return list(sources.values())
 
 def get_active_sources():
     results = collection.get(where={"active": True}, include=["metadatas"])

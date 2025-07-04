@@ -131,7 +131,7 @@ def load_youtube_data(url: str):
         cap = cv2.VideoCapture(video_path)
         fps = cap.get(cv2.CAP_PROP_FPS)
         cap.release()
-        frame_map = extract_frames_every_n_seconds(video_path, temp_dir, fps, interval=2)
+        frame_map = extract_frames_every_n_seconds(video_path, temp_dir, fps, interval=5)
 
         # --- Embedding teks dan gambar ---
         embeddings = []

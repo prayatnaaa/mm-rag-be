@@ -4,7 +4,7 @@ from PIL import Image
 import torch
 import numpy as np
 from deep_translator import GoogleTranslator
-from typing import Optional
+from typing import Optional, Dict, Union
 
 model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
 processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
@@ -20,7 +20,6 @@ def normalize(vec: np.ndarray) -> np.ndarray:
     if norm == 0:
         return vec
     return vec / norm
-
 
 def translate_to_english(text: str) -> str:
     try:
@@ -43,7 +42,7 @@ def embed_text(text: str, truncate=True) -> np.ndarray:
         embedding = model.get_text_features(**inputs).squeeze().numpy()
     return normalize(embedding)
 
-def embed_image(image_path: str | Image.Image) -> np.ndarray:
+def embed_image(image_path: Union[str, Image.Image]) -> np.ndarray:
     if isinstance(image_path, Image.Image):
         image = image_path
     else:
@@ -68,63 +67,50 @@ def add_embedding(vec: np.ndarray, metadata: dict) -> str:
     )
     return doc_id
 
-# def search(query: str, n_results=5, modality=None):
-#     query_embedding = embed_text(query)
-#     results = collection.query(
-#         query_embeddings=[query_embedding.tolist()],
-#         n_results=n_results,
-#         where={"modality": modality} if modality else None
-#     )
-#     return results
-
-def search(query: Optional[str] = None, image: Optional[str | Image.Image] = None, n_results: int = 5):
-
+def search(query: Optional[str] = None, image: Optional[Union[str, Image.Image]] = None, n_results: int = 5, where: Optional[Dict] = None) -> Dict:
     if not query and not image:
         raise ValueError("You must provide at least a text query or an image.")
 
-    query_embeddings = []
+    results = {
+        "query": query,
+        "text_results": {"documents": [[]], "metadatas": [[]], "distances": [[]]},
+        "image_results": {"documents": [[]], "metadatas": [[]], "distances": [[]]}
+    }
 
-    if query:
-        text_embedding = embed_text(query)
-        query_embeddings.append(text_embedding)
+    use_text = query and query.strip().lower() not in {
+        "jelaskan gambar ini", "apa isi gambar ini", "apa yang terjadi di gambar ini", "describe this image"
+    }
 
     if image:
         if isinstance(image, str):
-            pil_image = Image.open(image).convert("RGB")
-        elif isinstance(image, Image.Image):
-            pil_image = image
-        else:
-            raise ValueError("Invalid image format. Must be path or PIL.Image.")
+            image = Image.open(image).convert("RGB")
+        image_embedding = embed_image(image)
 
-        image_embedding = embed_image(pil_image)
-        query_embeddings.append(image_embedding)
+        results["text_results"] = collection.query(
+            query_embeddings=[image_embedding.tolist()],
+            n_results=n_results,
+            where={"$and": [{"modality": {"$eq": "text"}}, {"active": {"$eq": True}}, where]} if where else {"$and": [{"modality": {"$eq": "text"}}, {"active": {"$eq": True}}]}
+        )
 
-    combined_embedding = normalize(np.mean(query_embeddings, axis=0))
+        results["image_results"] = collection.query(
+            query_embeddings=[image_embedding.tolist()],
+            n_results=n_results,
+            where={"$and": [{"modality": {"$eq": "image"}}, {"active": {"$eq": True}}, where]} if where else {"$and": [{"modality": {"$eq": "image"}}, {"active": {"$eq": True}}]}
+        )
 
-    text_results = collection.query(
-        query_embeddings=[combined_embedding.tolist()],
-        n_results=n_results,
-        where={
-            "$and": [
-                {"modality": {"$eq": "text"}},
-                {"active": {"$eq": True}}
-            ]
-        }
-    )
+    elif use_text:
+        text_embedding = embed_text(query)
 
-    image_results = collection.query(
-        query_embeddings=[combined_embedding.tolist()],
-        n_results=n_results,
-        where={
-            "$and": [
-                {"modality": {"$eq": "image"}},
-                {"active": {"$eq": True}}
-            ]
-        }   
-    )
+        results["text_results"] = collection.query(
+            query_embeddings=[text_embedding.tolist()],
+            n_results=n_results,
+            where={"$and": [{"modality": {"$eq": "text"}}, {"active": {"$eq": True}}, where]} if where else {"$and": [{"modality": {"$eq": "text"}}, {"active": {"$eq": True}}]}
+        )
 
-    return {
-        "query": query,
-        "text_results": text_results,
-        "image_results": image_results
-    }
+        results["image_results"] = collection.query(
+            query_embeddings=[text_embedding.tolist()],
+            n_results=n_results,
+            where={"$and": [{"modality": {"$eq": "image"}}, {"active": {"$eq": True}}, where]} if where else {"$and": [{"modality": {"$eq": "image"}}, {"active": {"$eq": True}}]}
+        )
+
+    return results
