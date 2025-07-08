@@ -7,3 +7,4 @@ storage/
 /mm_map.pkl
 /text_map.pkl
 chromadb/
+.vscode/
