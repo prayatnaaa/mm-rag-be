@@ -12,6 +12,11 @@ from app.db.metadata_store import (
 from app.datastore.model import ChatCreateRequest, ChatCreateResponse, ChatHistoryResponse, create_new_chat, get_chat_history
 from app.agent_executor import run_agentic_rag
 from app.retriever.chromadb_index import search
+import time
+from concurrent.futures import ThreadPoolExecutor
+import asyncio
+
+executor = ThreadPoolExecutor()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -21,13 +26,13 @@ router = APIRouter()
 os.makedirs("storage", exist_ok=True)
 
 async def process_youtube_with_logging(url: str):
-    """
-    Process YouTube video with logging.
-    """
+    logger.info(f"Starting YouTube processing for URL: {url}")
+    start_time = time.time()
     try:
-        logger.info(f"Starting YouTube processing for URL: {url}")
-        result = load_youtube_data(url)
-        logger.info(f"Completed YouTube processing for URL: {url}")
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(executor, load_youtube_data, url)
+        elapsed_time = time.time() - start_time
+        logger.info(f"Completed YouTube processing for URL: {url} in {elapsed_time:.2f} seconds")
         return result
     except Exception as e:
         logger.error(f"Failed to process YouTube URL {url}: {str(e)}")
@@ -40,41 +45,14 @@ async def add_youtube(background_tasks: BackgroundTasks, url: str = Form(...)):
     """
     if not url.startswith(("https://www.youtube.com/", "https://youtu.be/")):
         raise HTTPException(status_code=400, detail="Invalid YouTube URL")
-    
-    background_tasks.add_task(process_youtube_with_logging, url)
+
+    background_tasks.add_task(lambda: load_youtube_data(url))
+
     return {
         "status": "processing",
         "message": "YouTube video is being processed in the background",
         "url": url
     }
-
-@router.post("/source/pdf")
-async def add_pdf(
-    file: UploadFile = File(...),
-    source_id: Optional[str] = Form(None)
-):
-    """
-    Adds a PDF file for processing.
-    If source_id is provided, it will be used; otherwise, a new one will be generated.
-    """
-    if not file.filename.endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="File must be a PDF")
-    
-    contents = await file.read()
-    pdf_path = os.path.join("storage", file.filename)
-    
-    with open(pdf_path, "wb") as f:
-        f.write(contents)
-
-    if not source_id:
-        source_id = f"pdf_{file.filename.split('.')[0]}"
-
-    try:
-        result = load_pdf_data(pdf_path, source_id)
-        return result
-    except Exception as e:
-        logger.error(f"Failed to process PDF {file.filename}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to process PDF: {str(e)}")
 
 @router.get("/source/list")
 def list_all():
@@ -153,7 +131,9 @@ async def rag_pipeline(
                 {
                     "text": ctx["text"],
                     "source_id": ctx["metadata"].get("source_id"),
+                    "title": ctx["metadata"].get("title"),
                     "youtube_url": ctx["metadata"].get("youtube_url", "unknown"),
+                    "minio_url": ctx["metadata"].get("minio_url", "unknown"),
                     "start_time": ctx["metadata"].get("start_time"),
                     "end_time": ctx["metadata"].get("end_time"),
                     "image_urls": ctx["metadata"].get("image_urls", "[]"),

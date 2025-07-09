@@ -26,15 +26,30 @@ genai.configure(api_key=GOOGLE_API_KEY)
 vision_model = genai.GenerativeModel("gemini-2.0-flash")
 llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0.3, google_api_key=GOOGLE_API_KEY)
 
-BASE_PROMPT = """You are an expert multimodal assistant capable of analyzing text and images from video transcripts and frames. Below are retrieved contexts relevant to the user's query.
+# BASE_PROMPT = """You are an expert multimodal assistant capable of analyzing text and images from video transcripts and frames. Below are retrieved contexts relevant to the user's query.
 
-Your task is to provide a clear, concise, and accurate answer based on the provided context. For image-related queries, describe visual content using metadata, captions, and direct image analysis if available. For summarization, combine insights from all sources. Respond in the user's detected language, ensuring clean, well-structured sentences with proper capitalization and no typos.
+# Your task is to provide a clear, concise, and accurate answer based on the provided context. For image-related queries, describe visual content using metadata, captions, and direct image analysis if available. For summarization, combine insights from all sources, do not mention video id, just use title. Respond in the user's detected language, ensuring clean, well-structured sentences with proper capitalization and no typos.
+
+# **Query**: {query}
+
+# **Context**:
+# {contexts}
+# """
+BASE_PROMPT = """
+You are a highly capable expert multimodal assistant specializing in the analysis of visual and textual content from videos, including frames, screenshots, transcripts, and metadata. Your role is to synthesize information from retrieved contexts to deliver high-quality, human-level responses tailored to the user's query.
+
+— Always prioritize clarity, factual accuracy, and relevance.
+— If the query involves **summarization or image analysis**, never reference transcripts, timestamps, or raw metadata in the response. Abstract all context into fluent, natural language.
+— If analyzing images, rely on a combination of visual content, embedded metadata, and any available captions. Provide a direct interpretation of what's visually present, including actions, objects, text in image, and scene layout.
+— For summarization queries, combine all textual and visual insights into a coherent and concise summary. Do not mention the video structure (e.g., "this part of the video", "the transcript says", etc.). Mention the video title and do not mention images or visual.
+— Respond in the **user’s language**, using polished, grammatically correct, well-structured sentences. Avoid typos, repetitions, or placeholder tokens.
 
 **Query**: {query}
 
 **Context**:
 {contexts}
 """
+
 
 def deduplicate_results(docs: List[str], metas: List[dict], dists: List[float]) -> List[Dict]:
     """
@@ -220,7 +235,7 @@ def retrieve_contexts(state: State) -> State:
     
     # For image_description queries, boost visual relevance by appending visual-related terms
     if state["query_type"] == "image_description" and query:
-        query = f"{query} visual clothing appearance scene"
+        query = f"{query}"
 
     if state["query_type"] == "summarize_all":
         sources = list_sources()
@@ -230,7 +245,7 @@ def retrieve_contexts(state: State) -> State:
             results = search(
                 query=query,
                 image=image,
-                n_results=10,
+                n_results=30,
                 where={"source_id": {"$eq": source_id}}
             )
             contexts.extend(deduplicate_results(
@@ -255,7 +270,7 @@ def summarize_all(state: State) -> State:
     contexts = state.get("contexts", [])
     lang = state.get("lang", "en")
     
-    prompt = build_prompt("Provide a comprehensive summary of all available information from all sources.", contexts, lang)
+    prompt = build_prompt("Provide a comprehensive summary of all available information from all sources. mention title than id", contexts, lang)
     result = llm.invoke(prompt).content
     
     return {**state, "answer": result, "contexts": contexts}

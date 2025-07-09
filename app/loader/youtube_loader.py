@@ -19,7 +19,7 @@ import json
 processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
 model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
 model.eval()
-
+whisper_model = WhisperModel("base", compute_type="int8")
 
 def clean_metadata(meta: dict):
     return {k: v for k, v in meta.items() if v is not None}
@@ -114,8 +114,7 @@ def extract_frames_every_n_seconds(video_path, output_dir, fps, interval=5):
 
 def transcribe_audio_whisper(audio_path: str):
     print(f"[INFO] Transcribing audio: {audio_path}")
-    model = WhisperModel("base", compute_type="int8")
-    segments, _ = model.transcribe(audio_path)
+    segments, _ = whisper_model.transcribe(audio_path)
     return [{"text": seg.text.strip(), "start": seg.start, "end": seg.end} for seg in segments]
 
 
@@ -189,6 +188,23 @@ def load_youtube_data(url: str):
                 image_url = upload_image(frame_path, image_object_name)
                 if image_url:
                     image_urls.append(image_url)
+
+                # Embed image with consistent metadata
+                image_embedding = embed_image(image)
+                image_meta = {
+                    "source_id": source_id,
+                    "video_id": video_id,
+                    "title": title,
+                    "captions": json.dumps([caption]),  
+                    "image_urls": json.dumps([image_url]),
+                    "start_time": t,
+                    "end_time": t + 10,  # Approximate duration for the frame
+                    "youtube_url": f"https://youtube.com/watch?v={video_id}",
+                    "modality": "image",
+                    "source": "youtube",
+                    "active": True,
+                }
+                add_embedding(image_embedding, clean_metadata(image_meta))
 
             combined_text = chunk_text + " " + " ".join(captions)
             vec = embed_text(combined_text)

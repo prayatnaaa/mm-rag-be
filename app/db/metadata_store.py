@@ -47,7 +47,9 @@ def list_sources():
 
 def get_active_sources():
     results = collection.get(where={"active": True}, include=["metadatas"])
-    return {m["source_id"]: m for m in results["metadatas"]}
+    
+    return results["metadatas"] if results["ids"] else []
+
 
 
 def set_active_status(source_id: str, is_active: bool):
