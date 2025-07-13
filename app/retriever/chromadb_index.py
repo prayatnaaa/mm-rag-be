@@ -112,19 +112,7 @@ def search(
     where: Optional[Dict] = None,
     text_weight: float = 0.5
 ) -> Dict:
-    """
-    Search the ChromaDB collection for multimodal embeddings.
     
-    Args:
-        query: Text query for search.
-        image: Image path or PIL Image for search.
-        n_results: Number of results to return.
-        where: Additional metadata filters.
-        text_weight: Weight for text embedding in multimodal queries (0 to 1).
-    
-    Returns:
-        Dictionary with query and results (documents, metadatas, distances).
-    """
     if not query and not image:
         raise ValueError("You must provide at least a text query or an image.")
 

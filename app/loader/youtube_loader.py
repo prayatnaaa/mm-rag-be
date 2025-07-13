@@ -189,22 +189,22 @@ def load_youtube_data(url: str):
                 if image_url:
                     image_urls.append(image_url)
 
-                # Embed image with consistent metadata
-                image_embedding = embed_image(image)
-                image_meta = {
-                    "source_id": source_id,
-                    "video_id": video_id,
-                    "title": title,
-                    "captions": json.dumps([caption]),  
-                    "image_urls": json.dumps([image_url]),
-                    "start_time": t,
-                    "end_time": t + 10,  # Approximate duration for the frame
-                    "youtube_url": f"https://youtube.com/watch?v={video_id}",
-                    "modality": "image",
-                    "source": "youtube",
-                    "active": True,
-                }
-                add_embedding(image_embedding, clean_metadata(image_meta))
+                # # Embed image with consistent metadata
+                # image_embedding = embed_image(image)
+                # image_meta = {
+                #     "source_id": source_id,
+                #     "video_id": video_id,
+                #     "title": title,
+                #     "captions": json.dumps([caption]),  
+                #     "image_urls": json.dumps([image_url]),
+                #     "start_time": t,
+                #     "end_time": t + 10,  # Approximate duration for the frame
+                #     "youtube_url": f"https://youtube.com/watch?v={video_id}",
+                #     "modality": "image",
+                #     "source": "youtube",
+                #     "active": True,
+                # }
+                # add_embedding(image_embedding, clean_metadata(image_meta))
 
             combined_text = chunk_text + " " + " ".join(captions)
             vec = embed_text(combined_text)

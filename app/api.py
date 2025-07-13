@@ -5,16 +5,14 @@ from typing import Optional
 from PIL import Image
 import io
 from app.loader.youtube_loader import load_youtube_data
-from app.loader.pdf_loader import load_pdf_data
 from app.db.metadata_store import (
     list_sources, delete_source, set_active_status, get_active_sources, delete_all_sources
 )
-from app.datastore.model import ChatCreateRequest, ChatCreateResponse, ChatHistoryResponse, create_new_chat, get_chat_history
 from app.agent_executor import run_agentic_rag
 from app.retriever.chromadb_index import search
-import time
 from concurrent.futures import ThreadPoolExecutor
-import asyncio
+from app.loader.youtube_status import mark_queued, mark_done, get_status
+from fastapi import Query
 
 executor = ThreadPoolExecutor()
 
@@ -25,34 +23,52 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 os.makedirs("storage", exist_ok=True)
 
-async def process_youtube_with_logging(url: str):
-    logger.info(f"Starting YouTube processing for URL: {url}")
-    start_time = time.time()
-    try:
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(executor, load_youtube_data, url)
-        elapsed_time = time.time() - start_time
-        logger.info(f"Completed YouTube processing for URL: {url} in {elapsed_time:.2f} seconds")
-        return result
-    except Exception as e:
-        logger.error(f"Failed to process YouTube URL {url}: {str(e)}")
-        raise
+# @router.post("/source/youtube")
+# async def add_youtube(background_tasks: BackgroundTasks, url: str = Form(...)):
+#     """
+#     Adds a YouTube video for processing in the background.
+#     """
+#     if not url.startswith(("https://www.youtube.com/", "https://youtu.be/")):
+#         raise HTTPException(status_code=400, detail="Invalid YouTube URL")
+
+#     background_tasks.add_task(lambda: load_youtube_data(url))
+
+#     return {
+#         "status": "processing",
+#         "message": "YouTube video is being processed in the background",
+#         "url": url
+#     }
+
+@router.get("/source/youtube/status")
+def youtube_processing_status(url: str = Query(...)):
+    """
+    Get processing status of a YouTube URL.
+    """
+    status = get_status(url)
+    return {
+        "url": url,
+        "status": status  # one of "queued", "done", "not_found"
+    }
 
 @router.post("/source/youtube")
 async def add_youtube(background_tasks: BackgroundTasks, url: str = Form(...)):
-    """
-    Adds a YouTube video for processing in the background.
-    """
     if not url.startswith(("https://www.youtube.com/", "https://youtu.be/")):
         raise HTTPException(status_code=400, detail="Invalid YouTube URL")
 
-    background_tasks.add_task(lambda: load_youtube_data(url))
+    mark_queued(url)
+
+    def wrapper():
+        load_youtube_data(url)
+        mark_done(url)
+
+    background_tasks.add_task(wrapper)
 
     return {
         "status": "processing",
         "message": "YouTube video is being processed in the background",
         "url": url
     }
+
 
 @router.get("/source/list")
 def list_all():
@@ -137,7 +153,8 @@ async def rag_pipeline(
                     "start_time": ctx["metadata"].get("start_time"),
                     "end_time": ctx["metadata"].get("end_time"),
                     "image_urls": ctx["metadata"].get("image_urls", "[]"),
-                    "distance": ctx["distance"]
+                    "distance": ctx["distance"],
+                    "type": ctx["metadata"].get("type", "unknown")
                 } for ctx in result.get("contexts", [])
             ]
         }

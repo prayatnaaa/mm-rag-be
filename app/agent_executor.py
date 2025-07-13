@@ -26,23 +26,15 @@ genai.configure(api_key=GOOGLE_API_KEY)
 vision_model = genai.GenerativeModel("gemini-2.0-flash")
 llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0.3, google_api_key=GOOGLE_API_KEY)
 
-# BASE_PROMPT = """You are an expert multimodal assistant capable of analyzing text and images from video transcripts and frames. Below are retrieved contexts relevant to the user's query.
-
-# Your task is to provide a clear, concise, and accurate answer based on the provided context. For image-related queries, describe visual content using metadata, captions, and direct image analysis if available. For summarization, combine insights from all sources, do not mention video id, just use title. Respond in the user's detected language, ensuring clean, well-structured sentences with proper capitalization and no typos.
-
-# **Query**: {query}
-
-# **Context**:
-# {contexts}
-# """
 BASE_PROMPT = """
 You are a highly capable expert multimodal assistant specializing in the analysis of visual and textual content from videos, including frames, screenshots, transcripts, and metadata. Your role is to synthesize information from retrieved contexts to deliver high-quality, human-level responses tailored to the user's query.
 
 — Always prioritize clarity, factual accuracy, and relevance.
 — If the query involves **summarization or image analysis**, never reference transcripts, timestamps, or raw metadata in the response. Abstract all context into fluent, natural language.
 — If analyzing images, rely on a combination of visual content, embedded metadata, and any available captions. Provide a direct interpretation of what's visually present, including actions, objects, text in image, and scene layout.
-— For summarization queries, combine all textual and visual insights into a coherent and concise summary. Do not mention the video structure (e.g., "this part of the video", "the transcript says", etc.). Mention the video title and do not mention images or visual.
-— Respond in the **user’s language**, using polished, grammatically correct, well-structured sentences. Avoid typos, repetitions, or placeholder tokens.
+— For summarization queries, combine all textual and visual insights into a coherent and concise summary. Do not mention the video structure (e.g., "this part of the video", "the transcript says", etc.).
+— Respond in this language: **{lang}**
+— Use polished, grammatically correct, well-structured sentences in {lang}.
 
 **Query**: {query}
 
@@ -102,6 +94,7 @@ def build_prompt(query: str, contexts: List[Dict], lang: str = "en") -> str:
         meta = ctx["metadata"]
         source = meta.get("source_id", "unknown")
         youtube_url = meta.get("youtube_url", "unknown")
+        title = meta.get("title", "untitled")
         start_time = meta.get("start_time", "unknown")
         end_time = meta.get("end_time", "unknown")
         image_urls = meta.get("image_urls", "[]")
@@ -116,13 +109,14 @@ def build_prompt(query: str, contexts: List[Dict], lang: str = "en") -> str:
             caption = "no caption"
         
         context_str += (
+            f"- [{i+1}] Title: {title}\n"
             f"- [{i+1}] Text: {text.strip()[:200]}...\n"
             f"  Source: {source}, YouTube URL: {youtube_url}\n"
             f"  Time: {start_time}s - {end_time}s\n"
             f"  Image: {image_url}, Caption: {caption}\n"
         )
     
-    return BASE_PROMPT.format(query=query, contexts=context_str or "None")
+    return BASE_PROMPT.format(query=query, contexts=context_str or "None", lang=lang)
 
 def generate_image_description(image: Optional[Union[Image.Image, bytes]], contexts: List[Dict], query: str, lang: str = "en") -> Dict:
     """
@@ -216,7 +210,8 @@ def classify_query(state: State) -> State:
 - "summarize_all": if asking for a full overview or summary of all sources.
 - "image_description": if asking about visual content (e.g., "describe the image", "baju apa", "what is in the video") or image-only input.
 - "answer_with_context": if asking a specific question or summary of a specific source.
-- "other": if it doesn't fit the above categories.
+- "other": if the query is irrelevant to the context (e.g. personal questions about unrelated figures, open-domain unrelated topics).
+
 
 Query: "{query}"
 Image Provided: {bool(image)}
@@ -268,9 +263,12 @@ def summarize_all(state: State) -> State:
     Summarize all available contexts.
     """
     contexts = state.get("contexts", [])
-    lang = state.get("lang", "en")
+    lang = state.get("lang")
+
+    for ctx in contexts:
+        ctx["metadata"]["type"] = "summarize"
     
-    prompt = build_prompt("Provide a comprehensive summary of all available information from all sources. mention title than id", contexts, lang)
+    prompt = build_prompt("Provide a comprehensive summary of all available information from all sources.", contexts, lang)
     result = llm.invoke(prompt).content
     
     return {**state, "answer": result, "contexts": contexts}
@@ -282,7 +280,10 @@ def describe_image(state: State) -> State:
     query = state["query"]
     image = state.get("image")
     contexts = state.get("contexts", [])
-    lang = state.get("lang", "en")
+    lang = state.get("lang")
+
+    for ctx in contexts:
+        ctx["metadata"]["type"] = "describe_image"
     
     result = generate_image_description(image, contexts, query, lang)
     return {**state, "answer": result["answer"], "contexts": contexts}
@@ -293,7 +294,10 @@ def answer_with_context(state: State) -> State:
     """
     query = state["query"]
     contexts = state.get("contexts", [])
-    lang = state.get("lang", "en")
+    lang = state.get("lang")
+
+    for ctx in contexts:
+        ctx["metadata"]["type"] = "answer_with_context"
     
     prompt = build_prompt(query, contexts, lang)
     result = llm.invoke(prompt).content
