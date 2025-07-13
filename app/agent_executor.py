@@ -14,7 +14,6 @@ from app.db.metadata_store import list_sources
 from langdetect import detect, DetectorFactory
 import logging
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -44,17 +43,6 @@ You are a highly capable expert multimodal assistant specializing in the analysi
 
 
 def deduplicate_results(docs: List[str], metas: List[dict], dists: List[float]) -> List[Dict]:
-    """
-    Deduplicate search results based on text content, sorting by distance.
-    
-    Args:
-        docs: List of document texts.
-        metas: List of metadata dictionaries.
-        dists: List of similarity distances.
-    
-    Returns:
-        List of deduplicated results with text, metadata, and distance.
-    """
     seen_hashes = set()
     deduped = []
     
@@ -77,17 +65,6 @@ def deduplicate_results(docs: List[str], metas: List[dict], dists: List[float]) 
     return sorted(deduped, key=lambda x: x["distance"])[:10]
 
 def build_prompt(query: str, contexts: List[Dict], lang: str = "en") -> str:
-    """
-    Build a formatted prompt for the LLM with query and contexts.
-    
-    Args:
-        query: User query string.
-        contexts: List of context dictionaries with text and metadata.
-        lang: Detected language code.
-    
-    Returns:
-        Formatted prompt string.
-    """
     context_str = ""
     for i, ctx in enumerate(contexts):
         text = ctx.get("text", "(no text)")
@@ -119,18 +96,6 @@ def build_prompt(query: str, contexts: List[Dict], lang: str = "en") -> str:
     return BASE_PROMPT.format(query=query, contexts=context_str or "None", lang=lang)
 
 def generate_image_description(image: Optional[Union[Image.Image, bytes]], contexts: List[Dict], query: str, lang: str = "en") -> Dict:
-    """
-    Generate a description for an image or infer from contexts and their image URLs.
-    
-    Args:
-        image: PIL Image or bytes object.
-        contexts: List of context dictionaries with metadata and captions.
-        query: User query string.
-        lang: Detected language code.
-    
-    Returns:
-        Dictionary with answer and evidence contexts.
-    """
     parts = [f"Describe the visual content related to '{query}' based on the provided contexts and images."]
     
     for ctx in contexts:
@@ -160,8 +125,7 @@ def generate_image_description(image: Optional[Union[Image.Image, bytes]], conte
             image_bytes = image
         image_parts.append({"mime_type": "image/jpeg", "data": image_bytes})
     
-    # Fetch images from context URLs
-    for ctx in contexts[:2]:  # Limit to 2 images to avoid overloading
+    for ctx in contexts[:2]:
         image_urls = ctx["metadata"].get("image_urls", "[]")
         try:
             image_urls = json.loads(image_urls) if isinstance(image_urls, str) else image_urls
@@ -189,8 +153,6 @@ def generate_image_description(image: Optional[Union[Image.Image, bytes]], conte
         error_msg = f"Error analyzing image: {str(e)}"
         return {"answer": error_msg, "evidence": contexts}
 
-# ==== LangGraph Nodes ====
-
 State = Dict[str, Union[str, List[Dict], Optional[Union[str, Image.Image]], str]]
 
 def classify_query(state: State) -> State:
@@ -200,22 +162,21 @@ def classify_query(state: State) -> State:
     query = state["query"]
     image = state.get("image")
     
-    # Detect language
     try:
         lang = detect(query) if query else "en"
     except Exception:
         lang = "en"
     
     classifier_prompt = f"""Classify the user query into one of the following:
-- "summarize_all": if asking for a full overview or summary of all sources.
-- "image_description": if asking about visual content (e.g., "describe the image", "baju apa", "what is in the video") or image-only input.
-- "answer_with_context": if asking a specific question or summary of a specific source.
-- "other": if the query is irrelevant to the context (e.g. personal questions about unrelated figures, open-domain unrelated topics).
+        - "summarize_all": if asking for a full overview or summary of all sources.
+        - "image_description": if asking about visual content (e.g., "describe the image", "baju apa", "what is in the video") or image-only input.
+        - "answer_with_context": if asking a specific question or summary of a specific source.
+        - "other": if the query is irrelevant to the context (e.g. personal questions about unrelated figures, open-domain unrelated topics).
 
 
-Query: "{query}"
-Image Provided: {bool(image)}
-Answer only with the label."""
+        Query: "{query}"
+        Image Provided: {bool(image)}
+        Answer only with the label."""
     
     result = llm.invoke(classifier_prompt).content.strip().lower()
     label = result if result in {"summarize_all", "image_description", "answer_with_context", "other"} else "other"
@@ -228,7 +189,6 @@ def retrieve_contexts(state: State) -> State:
     query = state["query"]
     image = state.get("image")
     
-    # For image_description queries, boost visual relevance by appending visual-related terms
     if state["query_type"] == "image_description" and query:
         query = f"{query}"
 
@@ -305,9 +265,6 @@ def answer_with_context(state: State) -> State:
     return {**state, "answer": result, "contexts": contexts}
 
 def build_graph():
-    """
-    Build the LangGraph workflow.
-    """
     workflow = StateGraph(State)
     
     workflow.add_node("classify", classify_query)
@@ -337,21 +294,9 @@ def build_graph():
     
     return workflow.compile()
 
-# ==== Public Function ====
-
 graph = build_graph()
 
 def run_agentic_rag(query: str = "", image: Optional[Union[str, Image.Image]] = None) -> Dict:
-    """
-    Run the multimodal RAG pipeline.
-    
-    Args:
-        query: User query string.
-        image: Optional image path or PIL Image.
-    
-    Returns:
-        Dictionary with query, answer, and contexts.
-    """
     try:
         if isinstance(image, str):
             image = Image.open(image).convert("RGB")

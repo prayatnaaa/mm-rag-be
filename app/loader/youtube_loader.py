@@ -3,7 +3,6 @@ import cv2
 import tempfile
 import yt_dlp
 import subprocess
-from moviepy.editor import VideoFileClip
 from faster_whisper import WhisperModel
 from app.utils.file_utils import save_frame
 from app.retriever.chromadb_index import add_embedding, embed_text, embed_image
@@ -15,7 +14,6 @@ from transformers import BlipProcessor, BlipForConditionalGeneration
 import torch
 import json
 
-# BLIP setup
 processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
 model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
 model.eval()
@@ -26,17 +24,10 @@ def clean_metadata(meta: dict):
 
 
 def is_logical_break(text):
-    # Akhir kalimat logis: titik, tanda seru, tanya, atau elipsis
     return bool(re.search(r"[.!?…]['”\"]?\s*$", text.strip()))
 
 
 def chunk_transcript(transcript, max_duration=30.0, max_chars=500):
-    """
-    Membagi transkrip menjadi potongan berdasarkan:
-    - Durasi maksimal
-    - Panjang karakter maksimal
-    - Pemutusan logis di akhir kalimat
-    """
     chunks = []
     current_chunk = []
     current_text = ""
@@ -120,7 +111,6 @@ def transcribe_audio_whisper(audio_path: str):
 
 def load_youtube_data(url: str):
     with tempfile.TemporaryDirectory() as temp_dir:
-        # Download video
         ydl_opts = {
             "outtmpl": os.path.join(temp_dir, "%(id)s.%(ext)s"),
             "format": "(bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4])[protocol^=http]",
@@ -138,13 +128,11 @@ def load_youtube_data(url: str):
 
         upload_video(video_path, object_name)
 
-        # Audio extraction
         audio_path = os.path.join(temp_dir, "audio.mp3")
         extract_audio(video_path, audio_path)
         transcript = transcribe_audio_whisper(audio_path)
         chunks = chunk_transcript(transcript, max_duration=30.0, max_chars=500)
 
-        # Get FPS for frame extraction
         cap = cv2.VideoCapture(video_path)
         fps = cap.get(cv2.CAP_PROP_FPS)
         cap.release()
@@ -163,7 +151,6 @@ def load_youtube_data(url: str):
                 frame_no = int(t * fps)
                 frame_path = os.path.join(temp_dir, f"frame_{frame_no}.jpg")
 
-                # Ambil frame
                 cap = cv2.VideoCapture(video_path)
                 cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
                 success, frame = cap.read()
@@ -174,7 +161,6 @@ def load_youtube_data(url: str):
 
                 save_frame(frame, frame_path)
 
-                # Captioning
                 image = Image.open(frame_path).convert("RGB")
                 inputs = processor(image, return_tensors="pt")
                 with torch.no_grad():
@@ -183,28 +169,10 @@ def load_youtube_data(url: str):
 
                 captions.append(caption)
 
-                # Upload image
                 image_object_name = f"{source_id}/frame_{frame_no}.jpg"
                 image_url = upload_image(frame_path, image_object_name)
                 if image_url:
                     image_urls.append(image_url)
-
-                # # Embed image with consistent metadata
-                # image_embedding = embed_image(image)
-                # image_meta = {
-                #     "source_id": source_id,
-                #     "video_id": video_id,
-                #     "title": title,
-                #     "captions": json.dumps([caption]),  
-                #     "image_urls": json.dumps([image_url]),
-                #     "start_time": t,
-                #     "end_time": t + 10,  # Approximate duration for the frame
-                #     "youtube_url": f"https://youtube.com/watch?v={video_id}",
-                #     "modality": "image",
-                #     "source": "youtube",
-                #     "active": True,
-                # }
-                # add_embedding(image_embedding, clean_metadata(image_meta))
 
             combined_text = chunk_text + " " + " ".join(captions)
             vec = embed_text(combined_text)
@@ -213,7 +181,7 @@ def load_youtube_data(url: str):
                 "source_id": source_id,
                 "video_id": video_id,
                 "title": title,
-                "text": chunk_text.strip(),
+                "text": json.dumps(combined_text),
                 "captions": json.dumps(captions),
                 "image_urls": json.dumps(image_urls),
                 "start_time": chunk["start"],

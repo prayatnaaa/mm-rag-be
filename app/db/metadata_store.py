@@ -1,7 +1,4 @@
-from datetime import datetime
 from typing import Optional
-from collections import defaultdict
-
 from app.retriever.chromadb_index import collection
 
 
@@ -17,40 +14,41 @@ def list_sources():
         sid = meta.get("source_id", "unknown")
         title = meta.get("title", "No Title")
         isActive = meta.get("active", False)
-        modality = meta.get("modality", "unknown")
 
-        # Inisialisasi struktur awal per source_id
         if sid not in sources:
             sources[sid] = {
                 "source_id": sid,
                 "title": title,
                 "active": isActive,
-                "items": []
+                "length": 0
             }
 
-        # Tambahkan metadata ke items
-        sources[sid]["items"].append({
-            "text": meta.get("text"),
-            "source_id": sid,
-            "title": title,
-            "source": meta.get("youtube_url"),
-            "image_url": meta.get("image_url"),
-            "start_time": meta.get("start_time"),
-            "end_time": meta.get("end_time"),
-            "created_at": meta.get("created_at", ""),
-            "active": meta.get("active"),
-            "modality": modality,
-        })
+        sources[sid]["length"] += 1
 
-    # Ubah dict menjadi list
     return list(sources.values())
+
 
 def get_active_sources():
     results = collection.get(where={"active": True}, include=["metadatas"])
-    
-    return results["metadatas"] if results["ids"] else []
+    sources = {}
 
+    for meta in results.get("metadatas", []):
+        sid = meta.get("source_id", "unknown")
+        title = meta.get("title", "No Title")
+        source = meta.get("source", "unknown")
+        active = meta.get("active", "false")
+        url = meta.get("youtube_url", "none")
 
+        if sid not in sources:
+            sources[sid] = {
+                "source_id": sid,
+                "title": title,
+                "source": source,
+                "url": url,
+                "active": active
+            }
+
+    return list(sources.values())
 
 def set_active_status(source_id: str, is_active: bool):
     results = collection.get(where={"source_id": source_id}, include=["metadatas"])
@@ -62,7 +60,6 @@ def set_active_status(source_id: str, is_active: bool):
         metadata["active"] = is_active
         collection.update(ids=[cid], metadatas=[metadata])
     return True
-
 
 def delete_source(source_id):
     try:
@@ -91,17 +88,3 @@ def delete_all_sources():
     except Exception as e:
         print(f"Failed to delete all: {e}")
         return False
-
-
-
-def get_chunk_counts_per_source(source_ids: Optional[list] = None):
-    if source_ids:
-        all_data = collection.get(where={"source_id": {"$in": source_ids}}, include=[])
-    else:
-        all_data = collection.get(include=[])
-
-    counts = {}
-    for sid in [meta["source_id"] for meta in all_data["metadatas"]]:
-        counts[sid] = counts.get(sid, 0) + 1
-
-    return counts

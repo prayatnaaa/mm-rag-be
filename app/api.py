@@ -16,28 +16,11 @@ from fastapi import Query
 
 executor = ThreadPoolExecutor()
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 os.makedirs("storage", exist_ok=True)
-
-# @router.post("/source/youtube")
-# async def add_youtube(background_tasks: BackgroundTasks, url: str = Form(...)):
-#     """
-#     Adds a YouTube video for processing in the background.
-#     """
-#     if not url.startswith(("https://www.youtube.com/", "https://youtu.be/")):
-#         raise HTTPException(status_code=400, detail="Invalid YouTube URL")
-
-#     background_tasks.add_task(lambda: load_youtube_data(url))
-
-#     return {
-#         "status": "processing",
-#         "message": "YouTube video is being processed in the background",
-#         "url": url
-#     }
 
 @router.get("/source/youtube/status")
 def youtube_processing_status(url: str = Query(...)):
@@ -47,7 +30,7 @@ def youtube_processing_status(url: str = Query(...)):
     status = get_status(url)
     return {
         "url": url,
-        "status": status  # one of "queued", "done", "not_found"
+        "status": status  
     }
 
 @router.post("/source/youtube")
@@ -119,10 +102,6 @@ async def rag_pipeline(
     question: Optional[str] = Form(None),
     image: Optional[UploadFile] = File(None)
 ):
-    """
-    Processes a query with optional image input using the multimodal RAG agent.
-    Returns an answer with contexts, including YouTube URLs and timestamps.
-    """
     if not question and not image:
         raise HTTPException(status_code=400, detail="At least one of question or image must be provided")
 

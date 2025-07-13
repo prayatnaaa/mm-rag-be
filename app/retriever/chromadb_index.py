@@ -8,7 +8,6 @@ from typing import Optional, Dict, Union
 import uuid
 import logging
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -75,36 +74,6 @@ def add_embedding(vec: np.ndarray, metadata: dict) -> str:
         logger.error(f"Error adding embedding to ChromaDB: {str(e)}")
         raise
 
-def add_embedding_pdf(vec: np.ndarray, metadata: dict) -> str:
-    if "source_id" not in metadata and "video_id" in metadata:
-        metadata["source_id"] = f"yt_{metadata['video_id']}"
-
-    modality = metadata.get("modality", "unknown")
-    source_id = metadata.get("source_id", "nosrc")
-    
-    if "video_id" in metadata and "start_time" in metadata:
-        unique_id = f"{metadata['video_id']}_{int(metadata['start_time'] * 1000)}"
-    elif "page" in metadata:
-        unique_id = f"page_{metadata['page']}_{uuid.uuid4().hex[:8]}"
-    else:
-        unique_id = uuid.uuid4().hex  
-
-    doc_id = f"{modality}_{source_id}_{unique_id}"
-
-    content = metadata.get("text", "(image)")
-
-    try:
-        collection.add(
-            documents=[content],
-            embeddings=[vec.tolist()],
-            metadatas=[metadata],
-            ids=[doc_id],
-        )
-        return doc_id
-    except Exception as e:
-        logger.error(f"Error adding PDF embedding to ChromaDB: {str(e)}")
-        raise
-
 def search(
     query: Optional[str] = None,
     image: Optional[Union[str, Image.Image]] = None,
@@ -116,14 +85,11 @@ def search(
     if not query and not image:
         raise ValueError("You must provide at least a text query or an image.")
 
-    # Initialize where clause
     where_conditions = [{"active": {"$eq": True}}]
     
-    # Add user-provided where conditions
     if where:
         where_conditions.append(where)
 
-    # Handle image-only query
     if image and not query:
         where_conditions.append({"modality": {"$eq": "image"}})
         where_clause = {"$and": where_conditions}
@@ -137,7 +103,6 @@ def search(
             where=where_clause
         )
         
-        # Log distances for debugging
         distances = result["distances"][0]
         logger.info(f"Image-only query distances: {distances}")
         
@@ -146,7 +111,6 @@ def search(
             "results": result
         }
 
-    # Handle text-only query
     if query and not image:
         where_conditions.append({"modality": {"$eq": "multimodal"}})
         where_clause = {"$and": where_conditions}
@@ -168,8 +132,7 @@ def search(
             "results": result
         }
 
-    # Handle multimodal query (text + image)
-    where_conditions.append({"modality": {"$eq": "multimodal"}})  # Prioritize text modality for multimodal
+    where_conditions.append({"modality": {"$eq": "multimodal"}})  
     where_clause = {"$and": where_conditions}
     
     query = translate_to_english(query)
@@ -180,7 +143,6 @@ def search(
     image = Image.open(image).convert("RGB") if isinstance(image, str) else image
     vec_image = embed_image(image)
     
-    # Weighted average for multimodal embedding
     combined_embedding = (text_weight * vec_text + (1 - text_weight) * vec_image)
     combined_embedding = normalize(combined_embedding)
 
@@ -190,7 +152,6 @@ def search(
         where=where_clause
     )
     
-    # Log distances for debugging
     distances = result["distances"][0]
     logger.info(f"Multimodal query distances: {distances}")
     
