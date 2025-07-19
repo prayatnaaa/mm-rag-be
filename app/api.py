@@ -37,7 +37,7 @@ def youtube_processing_status(url: str = Query(...)):
 async def add_youtube(background_tasks: BackgroundTasks, url: str = Form(...)):
     if not url.startswith(("https://www.youtube.com/", "https://youtu.be/")):
         raise HTTPException(status_code=400, detail="Invalid YouTube URL")
-
+    
     mark_queued(url)
 
     def wrapper():
@@ -143,7 +143,7 @@ async def rag_pipeline(
 
 @router.post("/ask")
 async def test_search(
-    question: str = Form(...),
+    question: Optional[str] = Form(None),
     image: Optional[UploadFile] = File(None)
 ):
     """

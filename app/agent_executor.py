@@ -11,13 +11,14 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph, END
 from app.retriever.chromadb_index import search
 from app.db.metadata_store import list_sources
-from langdetect import detect, DetectorFactory
+# from deep_translator import GoogleTranslator
+from langdetect import detect
 import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-DetectorFactory.seed = 0
+# DetectorFactory.seed = 0
 
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -29,9 +30,11 @@ BASE_PROMPT = """
 You are a highly capable expert multimodal assistant specializing in the analysis of visual and textual content from videos, including frames, screenshots, transcripts, and metadata. Your role is to synthesize information from retrieved contexts to deliver high-quality, human-level responses tailored to the user's query.
 
 — Always prioritize clarity, factual accuracy, and relevance.
-— If the query involves **summarization or image analysis**, never reference transcripts, timestamps, or raw metadata in the response. Abstract all context into fluent, natural language.
+— Always directly and explicitly answer the user’s query. If the query asks for a specific fact (e.g., location, name, date), provide that fact clearly and concisely at the beginning of your response.
+— If the query involves summarization or image analysis, never reference transcripts, timestamps, or raw metadata in the response. Abstract all context into fluent, natural language.
 — If analyzing images, rely on a combination of visual content, embedded metadata, and any available captions. Provide a direct interpretation of what's visually present, including actions, objects, text in image, and scene layout.
 — For summarization queries, combine all textual and visual insights into a coherent and concise summary. Do not mention the video structure (e.g., "this part of the video", "the transcript says", etc.).
+— If the retrieved context does not contain the factual information required to answer the query, respond by stating that the information is not available or cannot be determined from the provided context.
 — Respond in this language: **{lang}**
 — Use polished, grammatically correct, well-structured sentences in {lang}.
 
@@ -40,7 +43,6 @@ You are a highly capable expert multimodal assistant specializing in the analysi
 **Context**:
 {contexts}
 """
-
 
 def deduplicate_results(docs: List[str], metas: List[dict], dists: List[float]) -> List[Dict]:
     seen_hashes = set()
@@ -66,6 +68,7 @@ def deduplicate_results(docs: List[str], metas: List[dict], dists: List[float]) 
 
 def build_prompt(query: str, contexts: List[Dict], lang: str = "en") -> str:
     context_str = ""
+    print(lang)
     for i, ctx in enumerate(contexts):
         text = ctx.get("text", "(no text)")
         meta = ctx["metadata"]
@@ -127,10 +130,11 @@ def generate_image_description(image: Optional[Union[Image.Image, bytes]], conte
     
     for ctx in contexts[:2]:
         image_urls = ctx["metadata"].get("image_urls", "[]")
+        print(image_urls)
         try:
             image_urls = json.loads(image_urls) if isinstance(image_urls, str) else image_urls
             if image_urls:
-                for url in image_urls[:1]:  # Use the first image URL
+                for url in image_urls[:1]: 
                     try:
                         response = requests.get(url, timeout=5)
                         if response.status_code == 200:
@@ -156,16 +160,12 @@ def generate_image_description(image: Optional[Union[Image.Image, bytes]], conte
 State = Dict[str, Union[str, List[Dict], Optional[Union[str, Image.Image]], str]]
 
 def classify_query(state: State) -> State:
-    """
-    Classify the query type based on content and image presence.
-    """
     query = state["query"]
     image = state.get("image")
     
-    try:
-        lang = detect(query) if query else "en"
-    except Exception:
-        lang = "en"
+    lang = detect(query)
+    print(f"GOOGLE TRANSLATOR: {lang}")
+    
     
     classifier_prompt = f"""Classify the user query into one of the following:
         - "summarize_all": if asking for a full overview or summary of all sources.
@@ -249,9 +249,6 @@ def describe_image(state: State) -> State:
     return {**state, "answer": result["answer"], "contexts": contexts}
 
 def answer_with_context(state: State) -> State:
-    """
-    Answer query using retrieved contexts.
-    """
     query = state["query"]
     contexts = state.get("contexts", [])
     lang = state.get("lang")
@@ -307,7 +304,6 @@ def run_agentic_rag(query: str = "", image: Optional[Union[str, Image.Image]] = 
         })
         
         if not state or "answer" not in state:
-            lang = detect(query) if query else "en"
             error_msg = "Sorry, no answer could be found."
             return {
                 "query": query,
@@ -322,7 +318,6 @@ def run_agentic_rag(query: str = "", image: Optional[Union[str, Image.Image]] = 
         }
     
     except Exception as e:
-        lang = detect(query) if query else "en"
         error_msg = f"Error: {str(e)}"
         logger.error(error_msg)
         return {

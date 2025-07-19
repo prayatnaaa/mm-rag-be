@@ -13,6 +13,11 @@ from PIL import Image
 from transformers import BlipProcessor, BlipForConditionalGeneration
 import torch
 import json
+import logging
+import numpy as np
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
 model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
@@ -22,10 +27,8 @@ whisper_model = WhisperModel("base", compute_type="int8")
 def clean_metadata(meta: dict):
     return {k: v for k, v in meta.items() if v is not None}
 
-
 def is_logical_break(text):
     return bool(re.search(r"[.!?…]['”\"]?\s*$", text.strip()))
-
 
 def chunk_transcript(transcript, max_duration=30.0, max_chars=500):
     chunks = []
@@ -73,17 +76,15 @@ def chunk_transcript(transcript, max_duration=30.0, max_chars=500):
 
     return chunks
 
-
 def extract_audio(video_path: str, audio_path: str):
-    print(f"[INFO] Extracting audio with ffmpeg: {video_path}")
+    logger.info(f"Extracting audio with ffmpeg: {video_path}")
     cmd = [
         "ffmpeg", "-y", "-i", video_path,
         "-vn", "-acodec", "mp3", audio_path
     ]
     subprocess.run(cmd, check=True)
 
-
-def extract_frames_every_n_seconds(video_path, output_dir, fps, interval=5):
+def extract_frames_every_n_seconds(video_path, output_dir, fps, interval=10):
     cap = cv2.VideoCapture(video_path)
     frame_map = {}
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -98,16 +99,14 @@ def extract_frames_every_n_seconds(video_path, output_dir, fps, interval=5):
             save_frame(frame, frame_path)
             frame_map[round(timestamp, 2)] = frame_path
         else:
-            print(f"[WARN] Could not extract frame at {frame_no}.")
+            logger.warning(f"Could not extract frame at {frame_no}.")
     cap.release()
     return frame_map
 
-
 def transcribe_audio_whisper(audio_path: str):
-    print(f"[INFO] Transcribing audio: {audio_path}")
+    logger.info(f"Transcribing audio: {audio_path}")
     segments, _ = whisper_model.transcribe(audio_path)
     return [{"text": seg.text.strip(), "start": seg.start, "end": seg.end} for seg in segments]
-
 
 def load_youtube_data(url: str):
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -116,85 +115,114 @@ def load_youtube_data(url: str):
             "format": "(bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4])[protocol^=http]",
             "quiet": True,
         }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
+        try:
+            logger.info(f"Downloading YouTube video: {url}")
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
 
-        video_id = info["id"]
-        title = info["title"]
-        source_id = f"yt_{video_id}"
-        video_filename = f"{video_id}.mp4"
-        video_path = os.path.join(temp_dir, video_filename)
-        object_name = f"videos/{video_filename}"
+            video_id = info["id"]
+            title = info["title"]
+            source_id = f"yt_{video_id}"
+            video_filename = f"{video_id}.mp4"
+            video_path = os.path.join(temp_dir, video_filename)
+            object_name = f"videos/{video_filename}"
 
-        upload_video(video_path, object_name)
+            logger.info(f"Uploading video to MinIO: {object_name}")
+            upload_video(video_path, object_name)
 
-        audio_path = os.path.join(temp_dir, "audio.mp3")
-        extract_audio(video_path, audio_path)
-        transcript = transcribe_audio_whisper(audio_path)
-        chunks = chunk_transcript(transcript, max_duration=30.0, max_chars=500)
+            audio_path = os.path.join(temp_dir, "audio.mp3")
+            extract_audio(video_path, audio_path)
+            transcript = transcribe_audio_whisper(audio_path)
+            chunks = chunk_transcript(transcript, max_duration=30.0, max_chars=500)
 
-        cap = cv2.VideoCapture(video_path)
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        cap.release()
+            cap = cv2.VideoCapture(video_path)
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            cap.release()
 
-        results = []
+            logger.info("Extracting frames from video")
+            frame_map = extract_frames_every_n_seconds(video_path, temp_dir, fps, interval=10)
 
-        for chunk in chunks:
-            start = int(chunk["start"])
-            end = int(chunk["end"])
-            chunk_text = chunk["text"]
+            results = []
 
-            captions = []
-            image_urls = []
+            for chunk in chunks:
+                start = chunk["start"]
+                end = chunk["end"]
+                chunk_text = chunk["text"]
 
-            for t in range(start, end, 10):
-                frame_no = int(t * fps)
-                frame_path = os.path.join(temp_dir, f"frame_{frame_no}.jpg")
+                captions = []
+                image_urls = []
+                image_embeddings = []
 
-                cap = cv2.VideoCapture(video_path)
-                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
-                success, frame = cap.read()
-                cap.release()
+                frame_times = [t for t in frame_map.keys() if start <= t <= end]
+                frame_paths = [frame_map[t] for t in frame_times]
 
-                if not success:
-                    continue
+                if frame_paths:
+                    logger.info(f"Generating captions for {len(frame_paths)} frames in chunk {start}-{end}")
+                    try:
+                        images = [Image.open(path).convert("RGB") for path in frame_paths]
+                        inputs = processor(images, return_tensors="pt")
+                        with torch.no_grad():
+                            outputs = model.generate(**inputs)
+                        captions = [processor.decode(out, skip_special_tokens=True) for out in outputs]
+                    except Exception as e:
+                        logger.error(f"Failed to generate captions for chunk {start}-{end}: {str(e)}")
+                        captions = ["" for _ in frame_paths]
 
-                save_frame(frame, frame_path)
+                    for idx, frame_path in enumerate(frame_paths):
+                        try:
+                            logger.debug(f"Embedding image: {frame_path}")
+                            image_embedding = embed_image(frame_path)  
+                            image_embeddings.append(image_embedding)
 
-                image = Image.open(frame_path).convert("RGB")
-                inputs = processor(image, return_tensors="pt")
-                with torch.no_grad():
-                    out = model.generate(**inputs)
-                    caption = processor.decode(out[0], skip_special_tokens=True)
+                            frame_no = int(frame_times[idx] * fps)
+                            image_object_name = f"{source_id}/frame_{frame_no}.jpg"
+                            image_url = upload_image(frame_path, image_object_name)
+                            if image_url:
+                                image_urls.append(image_url)
+                            else:
+                                logger.warning(f"Failed to upload image: {image_object_name}")
+                        except Exception as e:
+                            logger.error(f"Failed to process frame {frame_path}: {str(e)}")
+                            continue
 
-                captions.append(caption)
+                combined_text = chunk_text + " " + " ".join(captions) if captions else chunk_text
+                logger.debug(f"Embedding text for chunk {start}-{end}")
+                text_vec = embed_text(combined_text)  
 
-                image_object_name = f"{source_id}/frame_{frame_no}.jpg"
-                image_url = upload_image(frame_path, image_object_name)
-                if image_url:
-                    image_urls.append(image_url)
+                meta = {
+                    "source_id": source_id,
+                    "video_id": video_id,
+                    "title": title,
+                    "text": json.dumps(combined_text),
+                    "captions": json.dumps(captions),
+                    "image_urls": json.dumps(image_urls),
+                    "image_embeddings": json.dumps([emb.tolist() for emb in image_embeddings]),  
+                    "start_time": chunk["start"],
+                    "end_time": chunk["end"],
+                    "youtube_url": f"https://youtube.com/watch?v={video_id}",
+                    "modality": "multimodal",
+                    "source": "youtube",
+                    "active": True,
+                }
 
-            combined_text = chunk_text + " " + " ".join(captions)
-            vec = embed_text(combined_text)
+                logger.info(f"Adding text embedding for chunk {start}-{end}")
+                add_embedding(text_vec, clean_metadata(meta))
 
-            meta = {
-                "source_id": source_id,
-                "video_id": video_id,
-                "title": title,
-                "text": json.dumps(combined_text),
-                "captions": json.dumps(captions),
-                "image_urls": json.dumps(image_urls),
-                "start_time": chunk["start"],
-                "end_time": chunk["end"],
-                "youtube_url": f"https://youtube.com/watch?v={video_id}",
-                "modality": "multimodal",
-                "source": "youtube",
-                "active": True,
-            }
+                for idx, img_embedding in enumerate(image_embeddings):
+                    image_meta = meta.copy()
+                    image_meta["frame_no"] = int(frame_times[idx] * fps) if idx < len(frame_times) else None
+                    image_meta["image_url"] = image_urls[idx] if idx < len(image_urls) else None
+                    image_meta["modality"] = "image"
+                    logger.debug(f"Adding image embedding for frame {image_meta['frame_no']}")
+                    add_embedding(img_embedding, clean_metadata(image_meta))
 
-            add_embedding(vec, clean_metadata(meta))
-            results.append(meta)
+                results.append(meta)
 
-        save_source(source_id, f"s3://{source_id}/", title, results)
+            logger.info(f"Saving source metadata for {source_id}")
+            save_source(source_id, f"s3://{source_id}/", title, results)
 
-        return results
+            return results
+
+        except Exception as e:
+            logger.error(f"Failed to process YouTube video {url}: {str(e)}")
+            return []
